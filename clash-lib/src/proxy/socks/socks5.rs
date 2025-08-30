@@ -99,12 +99,27 @@ pub(crate) async fn client_handshake(
     buf.put_u8(command);
     buf.put_u8(0x00);
     if command == socks_command::UDP_ASSOCIATE {
-        let addr = if addr.clone().must_into_socket_addr().is_ipv4() {
+        match addr {
+            SocksAddr::Ip(ip) => {
+                // 是 IP 地址，判断是 IPv4 还是 IPv6
+                let any_addr = if ip.is_ipv4() {
+                    SocksAddr::any_ipv4()
+                } else {
+                    SocksAddr::any_ipv6()
+                };
+                any_addr.write_buf(&mut buf);
+            }
+            SocksAddr::Domain(_,_) => {
+                // 是域名，可能无法判断 IPv4/IPv6，直接用 IPv4 Any（根据协议）
+                SocksAddr::any_ipv4().write_buf(&mut buf);
+            }
+        }
+        /*let addr = if addr.clone().must_into_socket_addr().is_ipv4() {
             SocksAddr::any_ipv4()
         } else {
             SocksAddr::any_ipv6()
         };
-        addr.write_buf(&mut buf);
+        addr.write_buf(&mut buf);*/
     } else {
         addr.write_buf(&mut buf);
     }
