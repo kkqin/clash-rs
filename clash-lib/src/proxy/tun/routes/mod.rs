@@ -33,6 +33,7 @@ use crate::config::internal::config::TunConfig;
 use crate::Runner;
 
 use crate::app::net::{get_interface_by_name};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 #[allow(dead_code)]
 pub fn maybe_add_routes(cfg: &TunConfig, tun_name: &str) -> std::io::Result<()> {
@@ -129,7 +130,7 @@ pub fn maybe_add_routes(cfg: &TunConfig, tun_name: &str) -> std::io::Result<()> 
     Ok(())
 }
 
-pub fn spawn_route_monitor() -> Option<Runner> {
+pub fn spawn_route_monitor(stop_flag: Arc<AtomicBool>) -> Option<Runner> {
     Some(Box::pin(async move {
         // open routing socket
         let rtsock = unsafe { libc::socket(libc::PF_ROUTE, libc::SOCK_RAW, 0) };
@@ -160,6 +161,12 @@ pub fn spawn_route_monitor() -> Option<Runner> {
                     buf.len(),
                 )
             };
+
+            if stop_flag.load(Ordering::SeqCst) {
+                warn!("route monitor stopping as requested");
+                break;
+            }
+
             if n <= 0 {
                 let err = io::Error::last_os_error();
                 if err.kind() == io::ErrorKind::WouldBlock || err.kind() == io::ErrorKind::TimedOut {
@@ -190,7 +197,6 @@ pub fn spawn_route_monitor() -> Option<Runner> {
                 _ => {}
             }
         }
-        #[allow(unreachable_code)]
         Ok(())
     }))
 }
