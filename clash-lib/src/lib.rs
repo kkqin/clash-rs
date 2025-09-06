@@ -123,6 +123,7 @@ pub struct GlobalState {
     tunnel_listener_handle: Option<JoinHandle<Result<()>>>,
     api_listener_handle: Option<JoinHandle<Result<()>>>,
     dns_listener_handle: Option<JoinHandle<Result<()>>>,
+    route_monitor: Option<JoinHandle<Result<()>>>,
     reload_tx: mpsc::Sender<(Config, oneshot::Sender<()>)>,
     cwd: String,
 }
@@ -249,6 +250,8 @@ pub async fn start(
     #[cfg(feature = "tun")]
     let tun_runner_handle = components.tun_runner.map(tokio::spawn);
     let dns_listener_handle = components.dns_listener.map(tokio::spawn);
+    #[cfg(all(feature = "tun", target_os = "macos"))]
+    let route_monitor = components.route_monitor.map(tokio::spawn);
 
     let (reload_tx, mut reload_rx) = mpsc::channel(1);
 
@@ -257,6 +260,7 @@ pub async fn start(
         #[cfg(feature = "tun")]
         tunnel_listener_handle: tun_runner_handle,
         dns_listener_handle,
+        route_monitor,
         reload_tx,
         api_listener_handle: None,
         cwd: cwd.to_string_lossy().to_string(),
@@ -332,6 +336,10 @@ pub async fn start(
             if let Some(h) = g.dns_listener_handle.take() {
                 h.abort();
             }
+            #[cfg(all(feature = "tun", target_os = "macos"))]
+            if let Some(h) = g.route_monitor.take() {
+                h.abort();
+            }
             if let Some(h) = g.api_listener_handle.take() {
                 h.abort();
             }
@@ -364,12 +372,17 @@ pub async fn start(
             )
             .map(tokio::spawn);
 
+            debug!("reloading route monitor");
+            #[cfg(all(feature = "tun", target_os = "macos"))]
+            let route_monitor = new_components.route_monitor.map(tokio::spawn);
+
             #[cfg(feature = "tun")]
             {
                 g.tunnel_listener_handle = tun_runner_handle;
             }
             g.dns_listener_handle = dns_listener_handle;
             g.api_listener_handle = api_listener_handle;
+            g.route_monitor = route_monitor;
         }
         Ok(())
     }));
@@ -392,6 +405,7 @@ struct RuntimeComponents {
     #[cfg(feature = "tun")]
     tun_runner: Option<Runner>,
     dns_listener: Option<Runner>,
+    route_monitor: Option<Runner>,
 }
 
 async fn create_components(
@@ -557,6 +571,12 @@ async fn create_components(
     let tun_runner =
         get_tun_runner(config.tun, dispatcher.clone(), dns_resolver.clone())?;
 
+    #[cfg(all(feature = "tun", target_os = "macos"))]
+    let route_monitor = {
+        use crate::proxy::tun::routes::spawn_route_monitor;
+        spawn_route_monitor()
+   };
+
     debug!("initializing dns listener");
     let dns_listener =
         dns::get_dns_listener(dns_listen, dns_resolver.clone(), &cwd).await;
@@ -573,6 +593,7 @@ async fn create_components(
         #[cfg(feature = "tun")]
         tun_runner,
         dns_listener,
+        route_monitor,
     })
 }
 

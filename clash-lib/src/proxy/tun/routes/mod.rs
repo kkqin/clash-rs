@@ -26,11 +26,13 @@ use other::add_route;
 #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 pub use other::maybe_routes_clean_up;
 
-use tracing::warn;
+use tracing::{warn, error};
+use std::{io, time::Duration};
 
 use crate::config::internal::config::TunConfig;
+use crate::Runner;
 
-use crate::app::net::get_interface_by_name;
+use crate::app::net::{get_interface_by_name};
 
 #[allow(dead_code)]
 pub fn maybe_add_routes(cfg: &TunConfig, tun_name: &str) -> std::io::Result<()> {
@@ -125,4 +127,70 @@ pub fn maybe_add_routes(cfg: &TunConfig, tun_name: &str) -> std::io::Result<()> 
     }
 
     Ok(())
+}
+
+pub fn spawn_route_monitor() -> Option<Runner> {
+    Some(Box::pin(async move {
+        // open routing socket
+        let rtsock = unsafe { libc::socket(libc::PF_ROUTE, libc::SOCK_RAW, 0) };
+        if rtsock < 0 {
+            error!("failed to open route socket: {:?}", io::Error::last_os_error());
+            return Err(io::Error::last_os_error().into());
+        }
+
+        // optional recv timeout
+        let tv = libc::timeval { tv_sec: 5, tv_usec: 0 };
+        unsafe {
+            libc::setsockopt(
+                rtsock,
+                libc::SOL_SOCKET,
+                libc::SO_RCVTIMEO,
+                &tv as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+            );
+        }
+
+        let mut buf = vec![0u8; 4096];
+
+        loop {
+            let n = unsafe {
+                libc::read(
+                    rtsock,
+                    buf.as_mut_ptr() as *mut libc::c_void,
+                    buf.len(),
+                )
+            };
+            if n <= 0 {
+                let err = io::Error::last_os_error();
+                if err.kind() == io::ErrorKind::WouldBlock || err.kind() == io::ErrorKind::TimedOut {
+                    continue;
+                } else {
+                    warn!("route monitor read error: {:?}", err);
+                    std::thread::sleep(Duration::from_secs(1));
+                    continue;
+                }
+            }
+
+            if (n as usize) < std::mem::size_of::<libc::rt_msghdr>() {
+                continue;
+            }
+
+            let rtm: &libc::rt_msghdr = unsafe { &*(buf.as_ptr() as *const libc::rt_msghdr) };
+
+            match rtm.rtm_type as i32 {
+                libc::RTM_DELETE | libc::RTM_CHANGE => {
+                    warn!("route socket event type={} flags=0x{:x}", rtm.rtm_type, rtm.rtm_flags);
+                    // 直接同步调用
+                    let rt_res = macos::maybe_add_default_route();
+                    match rt_res {
+                        Ok(_) => warn!("maybe_add_default_route succeeded"),
+                        Err(err) => error!("maybe_add_default_route error: {:?}", err),
+                    }
+                }
+                _ => {}
+            }
+        }
+        #[allow(unreachable_code)]
+        Ok(())
+    }))
 }

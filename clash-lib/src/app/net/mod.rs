@@ -239,3 +239,14 @@ impl Interface {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::app::net::get_outbound_interface;
+
+    #[test]
+    fn test_get_outbound_interface() {
+        let outbound = get_outbound_interface();
+        print!("{:?}", outbound);
+    }
+}
