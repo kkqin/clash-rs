@@ -29,9 +29,9 @@ use app::{
 };
 use common::{auth, http::new_http_client, mmdb};
 use config::def::LogLevel;
-use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "tun")]
 use proxy::tun::get_tun_runner;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use std::{
     collections::HashMap,
@@ -250,7 +250,7 @@ pub async fn start(
     #[cfg(feature = "tun")]
     let tun_runner_handle = components.tun_runner.map(tokio::spawn);
     let dns_listener_handle = components.dns_listener.map(tokio::spawn);
-    let route_stop =  Arc::new(AtomicBool::new(false));
+    let route_stop = Arc::new(AtomicBool::new(false));
     #[cfg(all(feature = "tun", target_os = "macos"))]
     {
         use crate::proxy::tun::routes::spawn_route_monitor;

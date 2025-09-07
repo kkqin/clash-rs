@@ -26,14 +26,16 @@ use other::add_route;
 #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 pub use other::maybe_routes_clean_up;
 
-use tracing::{warn, error};
 use std::{io, time::Duration};
+use tracing::{error, warn};
 
-use crate::config::internal::config::TunConfig;
-use crate::Runner;
+use crate::{Runner, config::internal::config::TunConfig};
 
-use crate::app::net::{get_interface_by_name};
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use crate::app::net::get_interface_by_name;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 #[allow(dead_code)]
 pub fn maybe_add_routes(cfg: &TunConfig, tun_name: &str) -> std::io::Result<()> {
@@ -135,12 +137,18 @@ pub fn spawn_route_monitor(stop_flag: Arc<AtomicBool>) -> Option<Runner> {
         // open routing socket
         let rtsock = unsafe { libc::socket(libc::PF_ROUTE, libc::SOCK_RAW, 0) };
         if rtsock < 0 {
-            error!("failed to open route socket: {:?}", io::Error::last_os_error());
+            error!(
+                "failed to open route socket: {:?}",
+                io::Error::last_os_error()
+            );
             return Err(io::Error::last_os_error().into());
         }
 
         // optional recv timeout
-        let tv = libc::timeval { tv_sec: 5, tv_usec: 0 };
+        let tv = libc::timeval {
+            tv_sec: 5,
+            tv_usec: 0,
+        };
         unsafe {
             libc::setsockopt(
                 rtsock,
@@ -155,11 +163,7 @@ pub fn spawn_route_monitor(stop_flag: Arc<AtomicBool>) -> Option<Runner> {
 
         loop {
             let n = unsafe {
-                libc::read(
-                    rtsock,
-                    buf.as_mut_ptr() as *mut libc::c_void,
-                    buf.len(),
-                )
+                libc::read(rtsock, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
             };
 
             if stop_flag.load(Ordering::SeqCst) {
@@ -169,7 +173,9 @@ pub fn spawn_route_monitor(stop_flag: Arc<AtomicBool>) -> Option<Runner> {
 
             if n <= 0 {
                 let err = io::Error::last_os_error();
-                if err.kind() == io::ErrorKind::WouldBlock || err.kind() == io::ErrorKind::TimedOut {
+                if err.kind() == io::ErrorKind::WouldBlock
+                    || err.kind() == io::ErrorKind::TimedOut
+                {
                     continue;
                 } else {
                     warn!("route monitor read error: {:?}", err);
@@ -182,16 +188,24 @@ pub fn spawn_route_monitor(stop_flag: Arc<AtomicBool>) -> Option<Runner> {
                 continue;
             }
 
-            let rtm: &libc::rt_msghdr = unsafe { &*(buf.as_ptr() as *const libc::rt_msghdr) };
+            let rtm: &libc::rt_msghdr =
+                unsafe { &*(buf.as_ptr() as *const libc::rt_msghdr) };
 
             match rtm.rtm_type as i32 {
                 libc::RTM_DELETE | libc::RTM_CHANGE => {
-                    warn!("route socket event type={} flags=0x{:x}", rtm.rtm_type, rtm.rtm_flags);
-                    // 直接同步调用
-                    let rt_res = macos::maybe_add_default_route();
-                    match rt_res {
-                        Ok(_) => warn!("maybe_add_default_route succeeded"),
-                        Err(err) => error!("maybe_add_default_route error: {:?}", err),
+                    if macos::has_default_route(rtm) {
+                        warn!(
+                            "route socket event type={} flags=0x{:x}",
+                            rtm.rtm_type, rtm.rtm_flags
+                        );
+                        // 直接同步调用
+                        let rt_res = macos::maybe_add_default_route();
+                        match rt_res {
+                            Ok(_) => warn!("maybe_add_default_route succeeded"),
+                            Err(err) => {
+                                error!("maybe_add_default_route error: {:?}", err)
+                            }
+                        }
                     }
                 }
                 _ => {}

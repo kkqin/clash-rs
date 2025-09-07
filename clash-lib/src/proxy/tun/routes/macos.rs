@@ -1,4 +1,4 @@
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use ipnet::IpNet;
 use tracing::warn;
@@ -8,6 +8,9 @@ use crate::{
     common::errors::new_io_error,
     config::internal::config::TunConfig,
 };
+
+use libc;
+use std::mem;
 
 /// let's assume that the `route` command is available on macOS
 pub fn add_route(via: &OutboundInterface, dest: &IpNet) -> std::io::Result<()> {
@@ -201,5 +204,113 @@ pub fn maybe_routes_clean_up(_: &TunConfig) -> std::io::Result<()> {
         ))
     } else {
         result
+    }
+}
+
+#[derive(Debug)]
+struct RouteEntry {
+    dst: String,
+    gateway: String,
+    ifname: String,
+    is_default: bool,
+}
+
+/// 解析 route 消息，提取 default route 信息
+unsafe fn parse_route_message(rtm: &libc::rt_msghdr) -> Option<RouteEntry> {
+    let mut sa_ptr =
+        unsafe { (rtm as *const _ as *const u8).add(mem::size_of::<libc::rt_msghdr>()) };
+    let addrs = rtm.rtm_addrs;
+
+    let mut dst = None;
+    let mut gateway = None;
+    let mut ifname = None;
+    let mut is_default = false;
+
+    for i in 0..libc::RTAX_MAX {
+        if (addrs & (1 << i)) == 0 {
+            continue;
+        }
+
+        let sa = sa_ptr as *const libc::sockaddr;
+        let sa_len = unsafe {(*sa).sa_len as usize};
+
+        match i {
+            libc::RTAX_DST => {
+                if unsafe {(*sa).sa_family as i32 == libc::AF_INET} {
+                    let sin = unsafe {&*(sa as *const libc::sockaddr_in)};
+                    let addr = Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr));
+                    dst = Some(addr.to_string());
+                    if addr == Ipv4Addr::UNSPECIFIED {
+                        is_default = true;
+                    }
+                } else if unsafe{(*sa).sa_family as i32 == libc::AF_INET6} {
+                    let sin6 = unsafe {&*(sa as *const libc::sockaddr_in6)};
+                    let addr = Ipv6Addr::from(sin6.sin6_addr.s6_addr);
+                    dst = Some(addr.to_string());
+                    if addr == Ipv6Addr::UNSPECIFIED {
+                        is_default = true;
+                    }
+                }
+            }
+            libc::RTAX_GATEWAY => {
+                if unsafe {(*sa).sa_family as i32 == libc::AF_INET }{
+                    let sin = unsafe {&*(sa as *const libc::sockaddr_in)};
+                    let addr = Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr));
+                    gateway = Some(addr.to_string());
+                } else if unsafe{(*sa).sa_family as i32 == libc::AF_INET6} {
+                    let sin6 = unsafe{&*(sa as *const libc::sockaddr_in6)};
+                    let addr = Ipv6Addr::from(sin6.sin6_addr.s6_addr);
+                    gateway = Some(addr.to_string());
+                }
+            }
+            libc::RTAX_IFP => {
+                if unsafe{(*sa).sa_family as i32 == libc::AF_LINK} {
+                    let sdl = unsafe{&*(sa as *const libc::sockaddr_dl)};
+                    let name = unsafe{std::slice::from_raw_parts(
+                        sdl.sdl_data.as_ptr() as *const u8,
+                        sdl.sdl_nlen as usize,
+                    )};
+                    if let Ok(s) = std::str::from_utf8(name) {
+                        ifname = Some(s.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        // 前进到下一个 sockaddr
+        sa_ptr = unsafe{sa_ptr.add(sa_len.max(mem::size_of::<libc::sockaddr>()))};
+    }
+
+    if is_default {
+        Some(RouteEntry {
+            dst: dst.unwrap_or_default(),
+            gateway: gateway.unwrap_or_default(),
+            ifname: ifname.unwrap_or_default(),
+            is_default,
+        })
+    } else {
+        None
+    }
+}
+
+pub fn has_default_route(rtm: &libc::rt_msghdr) -> bool {
+    let entry = unsafe { parse_route_message(rtm) };
+    if entry.is_some() {
+        let entry = entry.unwrap();
+        warn!("Detected default route change: {:?}", entry);
+        let (gateway_v4, gateway_v6) = get_default_gateway().unwrap_or((None, None));
+        if let Some(gateway) = gateway_v4 {
+            if gateway.to_string() == entry.gateway {
+                return true;
+            }
+        } else if let Some(gateway) = gateway_v6 {
+            if gateway.to_string() == entry.gateway {
+                return true;
+            }
+        }
+        false
+    } else {
+        false
     }
 }

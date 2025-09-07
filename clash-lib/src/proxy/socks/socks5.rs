@@ -109,17 +109,17 @@ pub(crate) async fn client_handshake(
                 };
                 any_addr.write_buf(&mut buf);
             }
-            SocksAddr::Domain(_,_) => {
+            SocksAddr::Domain(..) => {
                 // 是域名，可能无法判断 IPv4/IPv6，直接用 IPv4 Any（根据协议）
                 SocksAddr::any_ipv4().write_buf(&mut buf);
             }
         }
-        /*let addr = if addr.clone().must_into_socket_addr().is_ipv4() {
-            SocksAddr::any_ipv4()
-        } else {
-            SocksAddr::any_ipv6()
-        };
-        addr.write_buf(&mut buf);*/
+        // let addr = if addr.clone().must_into_socket_addr().is_ipv4() {
+        // SocksAddr::any_ipv4()
+        // } else {
+        // SocksAddr::any_ipv6()
+        // };
+        // addr.write_buf(&mut buf);
     } else {
         addr.write_buf(&mut buf);
     }
