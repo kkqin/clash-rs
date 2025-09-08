@@ -37,6 +37,16 @@ if ! command -v cbindgen &> /dev/null; then
     cargo +$TOOLCHAIN install cbindgen
 fi
 
+echo "Building library for iOS and macOS targets..."
+for target in "${IOS_ARCHS[@]}" "${MACOS_ARCHS[@]}"; do
+    if [[ "$target" == *"ios"* ]]; then
+        export IPHONEOS_DEPLOYMENT_TARGET=13.0
+    fi
+    cargo +$TOOLCHAIN build --target "$target" --release
+    mkdir -p "$OUTPUT_DIR/$target"
+    cp "target/$target/release/lib${LIB_NAME}.a" "$OUTPUT_DIR/$target/"
+done
+
 # Install necessary Rust targets
 echo "Installing necessary Rust targets..."
 for target in "${IOS_ARCHS[@]}" "${MACOS_ARCHS[@]}"; do
