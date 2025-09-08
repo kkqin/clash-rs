@@ -159,8 +159,8 @@ maxminddb = "0.26"
 public-suffix = "0.1"
 murmur3 = "0.5"
 
-arti-client = { version = "0.33", optional = true, default-features = false, features = ["tokio", "rustls", "static-sqlite"] }
-tor-rtcompat = { version = "0.33", optional = true, default-features = false }
+arti-client = { version = "0.34", optional = true, default-features = false, features = ["tokio", "rustls", "static-sqlite"] }
+tor-rtcompat = { version = "0.34", optional = true, default-features = false }
 
 # tuic
 tuic = { tag = "v1.4.6", optional = true, git = "https://github.com/Itsusinn/tuic.git" }
@@ -172,7 +172,7 @@ quinn = { version = "0.11", default-features = false, features = ["futures-io", 
 # hysteria2
 h3 = "0.0.8"
 h3-quinn = "0.0.10"
-quinn-proto = { version = "0.11.12", default-features = false }
+quinn-proto = { version = "0.11.13", default-features = false }
 blake2 = "0.10.6"
 digest = "0.10.7"
 
@@ -213,13 +213,13 @@ prost-build = "0.14"
 unix-udp-sock = { git = "https://github.com/Watfaq/unix-udp-sock.git", rev = "847c80b519f0fd8cff5c887ae708429897d08671" }
 
 [target.'cfg(macos)'.dependencies]
-security-framework = "3.3.0"
+security-framework = "3.4.0"
 
 [target.'cfg(target_os="ios")'.dependencies]
 tracing-oslog = "0.3"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = [
+windows = { version = "0.62", features = [
     "Win32_Networking_WinSock",
     "Win32_Foundation",
     "Win32_NetworkManagement_Rras",
