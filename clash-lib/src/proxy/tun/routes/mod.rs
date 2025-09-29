@@ -134,83 +134,117 @@ pub fn maybe_add_routes(cfg: &TunConfig, tun_name: &str) -> std::io::Result<()> 
 
 pub fn spawn_route_monitor(stop_flag: Arc<AtomicBool>) -> Option<Runner> {
     Some(Box::pin(async move {
-        // open routing socket
-        let rtsock = unsafe { libc::socket(libc::PF_ROUTE, libc::SOCK_RAW, 0) };
-        if rtsock < 0 {
-            error!(
-                "failed to open route socket: {:?}",
-                io::Error::last_os_error()
-            );
-            return Err(io::Error::last_os_error().into());
-        }
+        let mut backoff_secs = 1u64;
 
-        // optional recv timeout
-        let tv = libc::timeval {
-            tv_sec: 5,
-            tv_usec: 0,
-        };
-        unsafe {
-            libc::setsockopt(
-                rtsock,
-                libc::SOL_SOCKET,
-                libc::SO_RCVTIMEO,
-                &tv as *const _ as *const libc::c_void,
-                std::mem::size_of::<libc::timeval>() as libc::socklen_t,
-            );
-        }
-
-        let mut buf = vec![0u8; 4096];
-
-        loop {
-            let n = unsafe {
-                libc::read(rtsock, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
-            };
-
+        'restart: loop {
             if stop_flag.load(Ordering::SeqCst) {
-                warn!("route monitor stopping as requested");
-                break;
+                break 'restart;
             }
 
-            if n <= 0 {
-                let err = io::Error::last_os_error();
-                if err.kind() == io::ErrorKind::WouldBlock
-                    || err.kind() == io::ErrorKind::TimedOut
-                {
-                    continue;
-                } else {
-                    warn!("route monitor read error: {:?}", err);
-                    std::thread::sleep(Duration::from_secs(1));
-                    continue;
+            // open routing socket
+            let rtsock = unsafe { libc::socket(libc::PF_ROUTE, libc::SOCK_RAW, 0) };
+            if rtsock < 0 {
+                error!(
+                    "failed to open route socket: {:?}",
+                    io::Error::last_os_error()
+                );
+                std::thread::sleep(Duration::from_secs(backoff_secs));
+                backoff_secs = (backoff_secs * 2).min(60);
+                continue 'restart;
+            }
+
+            // shorter timeout for faster stop/retry
+            let tv = libc::timeval {
+                tv_sec: 1,
+                tv_usec: 0,
+            };
+            unsafe {
+                libc::setsockopt(
+                    rtsock,
+                    libc::SOL_SOCKET,
+                    libc::SO_RCVTIMEO,
+                    &tv as *const _ as *const libc::c_void,
+                    std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+                );
+            }
+
+            warn!("route monitor started (fd={})", rtsock);
+            backoff_secs = 1;
+
+            let mut buf = vec![0u8; 4096];
+
+            // inner read loop
+            loop {
+                if stop_flag.load(Ordering::SeqCst) {
+                    warn!("route monitor stopping as requested");
+                    unsafe { libc::close(rtsock) };
+                    break 'restart;
                 }
-            }
 
-            if (n as usize) < std::mem::size_of::<libc::rt_msghdr>() {
-                continue;
-            }
+                let n = unsafe {
+                    libc::read(
+                        rtsock,
+                        buf.as_mut_ptr() as *mut libc::c_void,
+                        buf.len(),
+                    )
+                };
 
-            let rtm: &libc::rt_msghdr =
-                unsafe { &*(buf.as_ptr() as *const libc::rt_msghdr) };
+                if n <= 0 {
+                    let err = io::Error::last_os_error();
+                    // timeout -> continue; fatal -> break to restart; other -> warn
+                    // and continue
+                    if err.kind() == io::ErrorKind::WouldBlock
+                        || err.kind() == io::ErrorKind::TimedOut
+                    {
+                        continue;
+                    }
 
-            match rtm.rtm_type as i32 {
-                libc::RTM_DELETE | libc::RTM_CHANGE => {
-                    if macos::has_default_route(rtm) {
-                        warn!(
-                            "route socket event type={} flags=0x{:x}",
-                            rtm.rtm_type, rtm.rtm_flags
-                        );
-                        // 直接同步调用
-                        let rt_res = macos::maybe_add_default_route();
-                        match rt_res {
-                            Ok(_) => warn!("maybe_add_default_route succeeded"),
-                            Err(err) => {
-                                error!("maybe_add_default_route error: {:?}", err)
-                            }
+                    match err.raw_os_error() {
+                        Some(code)
+                            if code == libc::EBADF || code == libc::ENOTCONN =>
+                        {
+                            error!("route monitor fatal error: {:?}", err);
+                            // close and restart
+                            unsafe { libc::close(rtsock) };
+                            std::thread::sleep(Duration::from_secs(backoff_secs));
+                            backoff_secs = (backoff_secs * 2).min(60);
+                            continue 'restart;
+                        }
+                        _ => {
+                            warn!("route monitor read error: {:?}", err);
+                            // small backoff for transient errors
+                            std::thread::sleep(Duration::from_millis(200));
+                            continue;
                         }
                     }
                 }
-                _ => {}
+
+                if (n as usize) < std::mem::size_of::<libc::rt_msghdr>() {
+                    continue;
+                }
+
+                let rtm: &libc::rt_msghdr =
+                    unsafe { &*(buf.as_ptr() as *const libc::rt_msghdr) };
+
+                match rtm.rtm_type as i32 {
+                    libc::RTM_DELETE | libc::RTM_CHANGE => {
+                        if macos::has_default_route(rtm) {
+                            warn!(
+                                "route socket event type={} flags=0x{:x}",
+                                rtm.rtm_type, rtm.rtm_flags
+                            );
+                            if let Err(err) = macos::maybe_add_default_route() {
+                                error!("maybe_add_default_route error: {:?}", err);
+                            } else {
+                                warn!("maybe_add_default_route succeeded");
+                            }
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
+
         Ok(())
     }))
 }

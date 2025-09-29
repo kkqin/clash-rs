@@ -217,8 +217,9 @@ struct RouteEntry {
 
 /// 解析 route 消息，提取 default route 信息
 unsafe fn parse_route_message(rtm: &libc::rt_msghdr) -> Option<RouteEntry> {
-    let mut sa_ptr =
-        unsafe { (rtm as *const _ as *const u8).add(mem::size_of::<libc::rt_msghdr>()) };
+    let mut sa_ptr = unsafe {
+        (rtm as *const _ as *const u8).add(mem::size_of::<libc::rt_msghdr>())
+    };
     let addrs = rtm.rtm_addrs;
 
     let mut dst = None;
@@ -232,19 +233,19 @@ unsafe fn parse_route_message(rtm: &libc::rt_msghdr) -> Option<RouteEntry> {
         }
 
         let sa = sa_ptr as *const libc::sockaddr;
-        let sa_len = unsafe {(*sa).sa_len as usize};
+        let sa_len = unsafe { (*sa).sa_len as usize };
 
         match i {
             libc::RTAX_DST => {
-                if unsafe {(*sa).sa_family as i32 == libc::AF_INET} {
-                    let sin = unsafe {&*(sa as *const libc::sockaddr_in)};
+                if unsafe { (*sa).sa_family as i32 == libc::AF_INET } {
+                    let sin = unsafe { &*(sa as *const libc::sockaddr_in) };
                     let addr = Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr));
                     dst = Some(addr.to_string());
                     if addr == Ipv4Addr::UNSPECIFIED {
                         is_default = true;
                     }
-                } else if unsafe{(*sa).sa_family as i32 == libc::AF_INET6} {
-                    let sin6 = unsafe {&*(sa as *const libc::sockaddr_in6)};
+                } else if unsafe { (*sa).sa_family as i32 == libc::AF_INET6 } {
+                    let sin6 = unsafe { &*(sa as *const libc::sockaddr_in6) };
                     let addr = Ipv6Addr::from(sin6.sin6_addr.s6_addr);
                     dst = Some(addr.to_string());
                     if addr == Ipv6Addr::UNSPECIFIED {
@@ -253,23 +254,25 @@ unsafe fn parse_route_message(rtm: &libc::rt_msghdr) -> Option<RouteEntry> {
                 }
             }
             libc::RTAX_GATEWAY => {
-                if unsafe {(*sa).sa_family as i32 == libc::AF_INET }{
-                    let sin = unsafe {&*(sa as *const libc::sockaddr_in)};
+                if unsafe { (*sa).sa_family as i32 == libc::AF_INET } {
+                    let sin = unsafe { &*(sa as *const libc::sockaddr_in) };
                     let addr = Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr));
                     gateway = Some(addr.to_string());
-                } else if unsafe{(*sa).sa_family as i32 == libc::AF_INET6} {
-                    let sin6 = unsafe{&*(sa as *const libc::sockaddr_in6)};
+                } else if unsafe { (*sa).sa_family as i32 == libc::AF_INET6 } {
+                    let sin6 = unsafe { &*(sa as *const libc::sockaddr_in6) };
                     let addr = Ipv6Addr::from(sin6.sin6_addr.s6_addr);
                     gateway = Some(addr.to_string());
                 }
             }
             libc::RTAX_IFP => {
-                if unsafe{(*sa).sa_family as i32 == libc::AF_LINK} {
-                    let sdl = unsafe{&*(sa as *const libc::sockaddr_dl)};
-                    let name = unsafe{std::slice::from_raw_parts(
-                        sdl.sdl_data.as_ptr() as *const u8,
-                        sdl.sdl_nlen as usize,
-                    )};
+                if unsafe { (*sa).sa_family as i32 == libc::AF_LINK } {
+                    let sdl = unsafe { &*(sa as *const libc::sockaddr_dl) };
+                    let name = unsafe {
+                        std::slice::from_raw_parts(
+                            sdl.sdl_data.as_ptr() as *const u8,
+                            sdl.sdl_nlen as usize,
+                        )
+                    };
                     if let Ok(s) = std::str::from_utf8(name) {
                         ifname = Some(s.to_string());
                     }
@@ -279,7 +282,7 @@ unsafe fn parse_route_message(rtm: &libc::rt_msghdr) -> Option<RouteEntry> {
         }
 
         // 前进到下一个 sockaddr
-        sa_ptr = unsafe{sa_ptr.add(sa_len.max(mem::size_of::<libc::sockaddr>()))};
+        sa_ptr = unsafe { sa_ptr.add(sa_len.max(mem::size_of::<libc::sockaddr>())) };
     }
 
     if is_default {
