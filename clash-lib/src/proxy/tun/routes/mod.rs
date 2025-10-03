@@ -228,7 +228,7 @@ pub fn spawn_route_monitor(stop_flag: Arc<AtomicBool>) -> Option<Runner> {
 
                 match rtm.rtm_type as i32 {
                     libc::RTM_DELETE | libc::RTM_CHANGE => {
-                        if macos::has_default_route(rtm) {
+                        if macos::has_default_route(rtm).await {
                             warn!(
                                 "route socket event type={} flags=0x{:x}",
                                 rtm.rtm_type, rtm.rtm_flags

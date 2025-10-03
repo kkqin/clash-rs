@@ -297,7 +297,7 @@ unsafe fn parse_route_message(rtm: &libc::rt_msghdr) -> Option<RouteEntry> {
     }
 }
 
-pub fn has_default_route(rtm: &libc::rt_msghdr) -> bool {
+pub async fn has_default_route(rtm: &libc::rt_msghdr) -> bool {
     let entry = unsafe { parse_route_message(rtm) };
     if entry.is_some() {
         let entry = entry.unwrap();
