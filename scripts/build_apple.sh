@@ -8,13 +8,13 @@ IOS_ARCHS=("aarch64-apple-ios" "x86_64-apple-ios" "aarch64-apple-ios-sim")
 MACOS_ARCHS=("aarch64-apple-darwin" "x86_64-apple-darwin")
 
 # Variables
-CRATE_NAME="clash_ffi"
+CRATE_NAME="clash-ffi"
 LIB_NAME="clashrs"
 OUTPUT_DIR="build"
 
 HEADERS_DIR="${OUTPUT_DIR}/Headers"
-HEADER_FILE="${HEADERS_DIR}/${LIB_NAME}.h"
-MODULEMAP_FILE="${HEADERS_DIR}/module.modulemap"
+HEADER_FILE="${HEADERS_DIR}/${LIB_NAME}/${LIB_NAME}.h"
+MODULEMAP_FILE="${HEADERS_DIR}/${LIB_NAME}/module.modulemap"
 XCFRAMEWORK_DIR="${OUTPUT_DIR}/${LIB_NAME}.xcframework"
 
 # Ensure the toolchain from rust-toolchain.toml is installed and switched
