@@ -132,6 +132,7 @@ pub fn maybe_add_routes(cfg: &TunConfig, tun_name: &str) -> std::io::Result<()> 
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 pub fn spawn_route_monitor(stop_flag: Arc<AtomicBool>) -> Option<Runner> {
     Some(Box::pin(async move {
         let mut backoff_secs = 1u64;
