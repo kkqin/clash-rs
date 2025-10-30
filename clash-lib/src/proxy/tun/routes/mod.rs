@@ -235,8 +235,7 @@ pub fn spawn_route_monitor(stop_flag: Arc<AtomicBool>) -> Option<Runner> {
                             continue;
                         }
 
-                        let msg = &buf[..(n as usize)];
-                        if macos::has_default_route(msg) {
+                        if macos::has_default_route(rtm).await {
                             // debounce to avoid thrashing
                             let now = std::time::Instant::now();
                             if last_fix.map(|t| now.duration_since(t) < Duration::from_secs(3)).unwrap_or(false) {
@@ -247,15 +246,13 @@ pub fn spawn_route_monitor(stop_flag: Arc<AtomicBool>) -> Option<Runner> {
                                 "route socket event type={} flags=0x{:x}",
                                 rtm.rtm_type, rtm.rtm_flags
                             );
+                            last_fix = Some(now);
                             match macos::maybe_add_default_route() {
                                 Ok(_) => {
                                     warn!("maybe_add_default_route succeeded");
-                                    last_fix = Some(now);
                                 }
                                 Err(err) => {
                                     error!("maybe_add_default_route error: {:?}", err);
-                                    // avoid tight loop on persistent error
-                                    last_fix = Some(now);
                                 }
                             }
                         }

@@ -480,6 +480,36 @@ impl DnsClient {
         options.remove(EdnsCode::Subnet);
         options.insert(EdnsOption::Subnet(ClientSubnet::new(addr, prefix, prefix)));
     }
+
+      fn is_transient_network_error(e: &ProtoError) -> bool {
+        // Best-effort check; Hickory flattens many IO errors into strings
+        let s = e.to_string();
+        s.contains("Network is unreachable")
+            || s.contains("timed out")
+            || s.contains("connection closed")
+            || s.contains("Broken pipe")
+            || s.contains("Connection reset")
+            || s.contains("transport error")
+            || s.contains("Transport error")
+            || s.contains("receiver was canceled")
+    }
+
+    async fn rebuild_client(&self) -> Result<(), Error> {
+        let mut inner = self.inner.write().await;
+        if let Some(bg) = inner.bg_handle.take() {
+            bg.abort();
+        }
+        inner.c = None;
+
+        // small backoff helps right after system wake
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        info!("reinitializing dns client after network error: {}", &self.cfg);
+        let (client, bg) = dns_stream_builder(&self.cfg).await?;
+        inner.c.replace(client);
+        inner.bg_handle.replace(bg);
+        Ok(())
+    }
 }
 
 impl Debug for DnsClient {
@@ -544,17 +574,40 @@ impl Client for DnsClient {
         if req.id() == 0 {
             req.set_id(rand::random::<u16>());
         }
-        self.inner
-            .read()
-            .await
-            .c
-            .as_ref()
-            .unwrap()
-            .send(req)
-            .first_answer()
-            .await
-            .map_err(|x| Error::DNSError(x.to_string()).into())
-            .map(|x| x.into())
+        // Send once
+        let send_once = |client: client::Client, req: DnsRequest| async move {
+            client.send(req).first_answer().await
+        };
+
+        // Clone client handle out of the lock if possible
+        let (first_try, client_clone) = {
+            let inner = self.inner.read().await;
+            let client = inner.c.as_ref().unwrap().clone();
+            (send_once(client.clone(), req.clone()).await, client)
+        };
+
+        match first_try {
+            Ok(ans) => Ok(ans.into()),
+            Err(e) => {
+                // Reset and retry once on transient errors
+                if Self::is_transient_network_error(&e) {
+                    warn!("transient DNS transport error detected, rebuilding client: {}", e);
+                    if let Err(rebuild_err) = self.rebuild_client().await {
+                        return Err(Error::DNSError(rebuild_err.to_string()).into());
+                    }
+
+                    // send again with fresh client
+                    let inner = self.inner.read().await;
+                    let client = inner.c.as_ref().unwrap().clone();
+                    send_once(client, req)
+                        .await
+                        .map_err(|x| Error::DNSError(x.to_string()).into())
+                        .map(|x| x.into())
+                } else {
+                    Err(Error::DNSError(e.to_string()).into())
+                }
+            }
+        }
     }
 }
 
