@@ -149,6 +149,60 @@ pub fn maybe_add_default_route() -> std::io::Result<()> {
     }
 }
 
+/// Add essential bypass routes for system services that use multicast and link-local
+/// networking (mDNS, AWDL/AirDrop, AirPlay, etc.). Without these, route_all may
+/// hijack 224.0.0.0/4 and ff00::/8 into the utun, breaking Apple daemons like remoted.
+pub fn maybe_add_system_bypass_routes() -> std::io::Result<()> {
+    let default_interface =
+        get_outbound_interface().ok_or(new_io_error("get default interface"))?;
+
+    // IPv4 multicast and link-local subnets
+    let bypass_v4: [(&str, &str); 2] = [("224.0.0.0/4", "-net"), ("169.254.0.0/16", "-net")];
+    for (cidr, kind) in bypass_v4 {
+        let mut cmd = std::process::Command::new("route");
+        cmd.arg("add")
+            .arg(kind)
+            .arg(cidr)
+            .arg("-interface")
+            .arg(&default_interface.name);
+
+        warn!(
+            "executing: route add {} {} -interface {}",
+            kind, cidr, default_interface.name
+        );
+        let out = cmd.output()?;
+        if !out.status.success() {
+            // Don't hard fail; keep best-effort behavior
+            warn!("failed to add IPv4 bypass route {} on {}", cidr, default_interface.name);
+        }
+    }
+
+    // IPv6 multicast and link-local subnets
+    let bypass_v6: [&str; 2] = ["ff00::/8", "fe80::/10"]; // multicast, link-local
+    for cidr in bypass_v6 {
+        let mut cmd = std::process::Command::new("route");
+        cmd.arg("add")
+            .arg("-inet6")
+            .arg(cidr)
+            .arg("-interface")
+            .arg(&default_interface.name);
+
+        warn!(
+            "executing: route add -inet6 {} -interface {}",
+            cidr, default_interface.name
+        );
+        let out = cmd.output()?;
+        if !out.status.success() {
+            warn!(
+                "failed to add IPv6 bypass route {} on {}",
+                cidr, default_interface.name
+            );
+        }
+    }
+
+    Ok(())
+}
+
 /// failing to delete the default route won't cause route failure
 pub fn maybe_routes_clean_up(_: &TunConfig) -> std::io::Result<()> {
     let (gateway_v4, gateway_v6) = get_default_gateway()?;
@@ -195,6 +249,32 @@ pub fn maybe_routes_clean_up(_: &TunConfig) -> std::io::Result<()> {
 
         if !cmd.status.success() {
             result = Err(new_io_error("delete default IPv6 route failed"));
+        }
+    }
+
+    // Try to clean up bypass routes (best-effort)
+    for (cidr, kind) in [("224.0.0.0/4", "-net"), ("169.254.0.0/16", "-net")] {
+        let out = std::process::Command::new("route")
+            .arg("delete")
+            .arg(kind)
+            .arg(cidr)
+            .arg("-interface")
+            .arg(&default_interface.name)
+            .output()?;
+        if !out.status.success() {
+            warn!("failed to delete IPv4 bypass route {} on {}", cidr, default_interface.name);
+        }
+    }
+    for cidr in ["ff00::/8", "fe80::/10"] {
+        let out = std::process::Command::new("route")
+            .arg("delete")
+            .arg("-inet6")
+            .arg(cidr)
+            .arg("-interface")
+            .arg(&default_interface.name)
+            .output()?;
+        if !out.status.success() {
+            warn!("failed to delete IPv6 bypass route {} on {}", cidr, default_interface.name);
         }
     }
 

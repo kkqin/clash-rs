@@ -116,6 +116,12 @@ pub fn maybe_add_routes(cfg: &TunConfig, tun_name: &str) -> std::io::Result<()> 
                 #[cfg(target_os = "macos")]
                 {
                     macos::maybe_add_default_route()?;
+                    // Keep system services (mDNS/AWDL/AirPlay, etc.) working by bypassing
+                    // multicast and link-local traffic around the TUN.
+                    let _ = macos::maybe_add_system_bypass_routes().map_err(|e| {
+                        warn!("failed to add system bypass routes: {:?}", e);
+                        e
+                    });
                 }
             }
             #[cfg(target_os = "linux")]
