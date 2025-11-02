@@ -26,7 +26,7 @@ use other::add_route;
 #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 pub use other::maybe_routes_clean_up;
 
-use std::{io, time::Duration};
+use std::{collections::HashSet, io, net::IpAddr, time::Duration};
 use tracing::{error, warn};
 
 use crate::{Runner, config::internal::config::TunConfig};
@@ -36,6 +36,45 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+
+#[cfg(target_os = "macos")]
+use std::sync::LazyLock;
+#[cfg(target_os = "macos")]
+use tokio::sync::broadcast;
+
+#[cfg(target_os = "macos")]
+static NETCHANGE_TX: LazyLock<broadcast::Sender<()>> = LazyLock::new(|| {
+    let (tx, _rx) = broadcast::channel(16);
+    tx
+});
+
+#[cfg(target_os = "macos")]
+static HOST_ROUTE_REGISTRY: LazyLock<tokio::sync::RwLock<HashSet<IpAddr>>> =
+    LazyLock::new(|| tokio::sync::RwLock::new(HashSet::new()));
+
+#[cfg(target_os = "macos")]
+pub fn subscribe_netchange() -> broadcast::Receiver<()> {
+    NETCHANGE_TX.subscribe()
+}
+
+#[cfg(target_os = "macos")]
+pub async fn register_host_route_target(ip: IpAddr) {
+    HOST_ROUTE_REGISTRY.write().await.insert(ip);
+}
+
+#[cfg(target_os = "macos")]
+pub fn ensure_host_route(ip: IpAddr) {
+    let _ = macos::maybe_add_host_route_for_addr(&ip);
+}
+
+#[cfg(target_os = "macos")]
+async fn reapply_host_routes() {
+    let ips: Vec<IpAddr> = HOST_ROUTE_REGISTRY.read().await.iter().cloned().collect();
+    for ip in ips {
+        // best-effort
+        let _ = macos::maybe_add_host_route_for_addr(&ip);
+    }
+}
 
 #[allow(dead_code)]
 pub fn maybe_add_routes(cfg: &TunConfig, tun_name: &str) -> std::io::Result<()> {
@@ -237,12 +276,7 @@ pub fn spawn_route_monitor(stop_flag: Arc<AtomicBool>) -> Option<Runner> {
 
                 match rtm.rtm_type as i32 {
                     libc::RTM_DELETE | libc::RTM_CHANGE => {
-                        // Skip events related to scoped routes to avoid self-trigger loops
-                        if (rtm.rtm_flags & libc::RTF_IFSCOPE as i32) != 0 {
-                            continue;
-                        }
-
-                        if macos::has_default_route(rtm).await {
+                        if macos::has_default_route(rtm) {
                             // debounce to avoid thrashing
                             let now = std::time::Instant::now();
                             if last_fix.map(|t| now.duration_since(t) < Duration::from_secs(3)).unwrap_or(false) {
@@ -254,14 +288,17 @@ pub fn spawn_route_monitor(stop_flag: Arc<AtomicBool>) -> Option<Runner> {
                                 rtm.rtm_type, rtm.rtm_flags
                             );
                             last_fix = Some(now);
-                            match macos::maybe_add_default_route() {
-                                Ok(_) => {
-                                    warn!("maybe_add_default_route succeeded");
-                                }
-                                Err(err) => {
-                                    error!("maybe_add_default_route error: {:?}", err);
-                                }
+                            if let Err(err) = macos::maybe_add_default_route() {
+                                error!("maybe_add_default_route error: {:?}", err);
+                            } else {
+                                warn!("maybe_add_default_route succeeded");
                             }
+
+                            // Re-apply any registered host routes (best-effort)
+                            reapply_host_routes().await;
+
+                            // Broadcast a netchange event to subscribers (e.g., outbound manager)
+                            let _ = NETCHANGE_TX.send(());
                         }
                     }
                     _ => {}

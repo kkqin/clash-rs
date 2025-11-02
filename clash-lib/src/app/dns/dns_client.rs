@@ -34,6 +34,8 @@ use crate::{
     dns::{ThreadSafeDNSClient, dhcp::DhcpClient},
     proxy::OutboundHandler,
 };
+#[cfg(target_os = "macos")]
+use crate::proxy::tun::routes::{ensure_host_route, register_host_route_target};
 use anyhow::anyhow;
 use hickory_proto::{
     DnsHandle,
@@ -332,6 +334,12 @@ impl DnsClient {
 
                 match other {
                     DNSNetMode::Udp => {
+                        #[cfg(target_os = "macos")]
+                        {
+                            // Best-effort add a scoped host route so DNS works during Wi‑Fi switches
+                            ensure_host_route(ip);
+                            register_host_route_target(ip).await;
+                        }
                         let cfg = DnsConfig::Udp(
                             net::SocketAddr::new(ip, opts.port),
                             opts.iface.clone(),
@@ -355,6 +363,11 @@ impl DnsClient {
                         }))
                     }
                     DNSNetMode::Tcp => {
+                        #[cfg(target_os = "macos")]
+                        {
+                            ensure_host_route(ip);
+                            register_host_route_target(ip).await;
+                        }
                         let cfg = DnsConfig::Tcp(
                             net::SocketAddr::new(ip, opts.port),
                             opts.iface.clone(),
@@ -377,6 +390,11 @@ impl DnsClient {
                         }))
                     }
                     DNSNetMode::DoT => {
+                        #[cfg(target_os = "macos")]
+                        {
+                            ensure_host_route(ip);
+                            register_host_route_target(ip).await;
+                        }
                         let cfg = DnsConfig::Tls(
                             net::SocketAddr::new(ip, opts.port),
                             opts.host.clone(),
@@ -400,6 +418,11 @@ impl DnsClient {
                         }))
                     }
                     DNSNetMode::DoH => {
+                        #[cfg(target_os = "macos")]
+                        {
+                            ensure_host_route(ip);
+                            register_host_route_target(ip).await;
+                        }
                         let cfg = DnsConfig::Https(
                             net::SocketAddr::new(ip, opts.port),
                             opts.host.clone(),

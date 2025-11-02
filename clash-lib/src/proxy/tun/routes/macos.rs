@@ -203,6 +203,71 @@ pub fn maybe_add_system_bypass_routes() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Add a host-specific route for a unicast destination to ensure it follows
+/// the current default physical interface and gateway (bypassing utun/route_all).
+pub(crate) fn maybe_add_host_route_for_addr(ip: &std::net::IpAddr) -> std::io::Result<()> {
+    let (gateway_v4, gateway_v6) = get_default_gateway()?;
+    let default_interface =
+        get_outbound_interface().ok_or(new_io_error("get default interface"))?;
+
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            if let Some(gw) = gateway_v4 {
+                let out = std::process::Command::new("route")
+                    .arg("add")
+                    .arg("-host")
+                    .arg(v4.to_string())
+                    .arg("-ifscope")
+                    .arg(&default_interface.name)
+                    .arg(gw.to_string())
+                    .output()?;
+                warn!(
+                    "executing: route add -host {} -ifscope {} {}",
+                    v4, default_interface.name, gw
+                );
+                if !out.status.success() {
+                    let err = String::from_utf8_lossy(&out.stderr);
+                    // best-effort: ignore if already exists
+                    if !err.contains("File exists") {
+                        warn!(
+                            "failed to add host route {} via {} ifscope {}: {}",
+                            v4, gw, default_interface.name, err.trim()
+                        );
+                    }
+                }
+            }
+        }
+        std::net::IpAddr::V6(v6) => {
+            if let Some(gw) = gateway_v6 {
+                let out = std::process::Command::new("route")
+                    .arg("add")
+                    .arg("-inet6")
+                    .arg("-host")
+                    .arg(v6.to_string())
+                    .arg("-ifscope")
+                    .arg(&default_interface.name)
+                    .arg(gw.to_string())
+                    .output()?;
+                warn!(
+                    "executing: route add -inet6 -host {} -ifscope {} {}",
+                    v6, default_interface.name, gw
+                );
+                if !out.status.success() {
+                    let err = String::from_utf8_lossy(&out.stderr);
+                    if !err.contains("File exists") {
+                        warn!(
+                            "failed to add ipv6 host route {} via {} ifscope {}: {}",
+                            v6, gw, default_interface.name, err.trim()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// failing to delete the default route won't cause route failure
 pub fn maybe_routes_clean_up(_: &TunConfig) -> std::io::Result<()> {
     let (gateway_v4, gateway_v6) = get_default_gateway()?;
@@ -377,7 +442,7 @@ unsafe fn parse_route_message(rtm: &libc::rt_msghdr) -> Option<RouteEntry> {
     }
 }
 
-pub async fn has_default_route(rtm: &libc::rt_msghdr) -> bool {
+pub fn has_default_route(rtm: &libc::rt_msghdr) -> bool {
     let entry = unsafe { parse_route_message(rtm) };
     if entry.is_some() {
         let entry = entry.unwrap();

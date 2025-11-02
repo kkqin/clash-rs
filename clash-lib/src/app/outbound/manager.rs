@@ -115,6 +115,32 @@ impl OutboundManager {
         debug!("initializing connectors");
         m.init_handler_connectors().await?;
 
+        // Subscribe to network-change events on macOS and trigger a quick healthcheck sweep
+        #[cfg(target_os = "macos")]
+        {
+            use crate::proxy::tun::routes::subscribe_netchange;
+            let providers: Vec<ThreadSafeProxyProvider> =
+                m.proxy_providers.values().cloned().collect();
+            tokio::spawn(async move {
+                let mut rx = subscribe_netchange();
+                loop {
+                    match rx.recv().await {
+                        Ok(()) => {
+                            // Best-effort: kick healthchecks to force reconnections after net change
+                            for p in &providers {
+                                let p = p.clone();
+                                tokio::spawn(async move {
+                                    p.read().await.healthcheck().await;
+                                });
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        Err(_) => continue,
+                    }
+                }
+            });
+        }
+
         Ok(m)
     }
 
