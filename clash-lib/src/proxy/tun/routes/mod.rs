@@ -68,6 +68,25 @@ pub fn ensure_host_route(ip: IpAddr) {
 }
 
 #[cfg(target_os = "macos")]
+/// Best-effort cleanup of any registered host routes (e.g., DNS servers like 1.1.1.1).
+/// This function is synchronous and uses try_* locks to avoid blocking in shutdown paths.
+pub fn cleanup_host_routes() {
+    // Snapshot the list without awaiting
+    if let Ok(guard) = HOST_ROUTE_REGISTRY.try_read() {
+        let ips: Vec<IpAddr> = guard.iter().cloned().collect();
+        drop(guard);
+        for ip in ips {
+            let _ = macos::maybe_delete_host_route_for_addr(&ip);
+        }
+    }
+
+    // Clear registry (best-effort)
+    if let Ok(mut w) = HOST_ROUTE_REGISTRY.try_write() {
+        w.clear();
+    }
+}
+
+#[cfg(target_os = "macos")]
 async fn reapply_host_routes() {
     let ips: Vec<IpAddr> = HOST_ROUTE_REGISTRY.read().await.iter().cloned().collect();
     for ip in ips {

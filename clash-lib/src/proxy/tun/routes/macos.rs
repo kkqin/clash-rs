@@ -268,6 +268,64 @@ pub(crate) fn maybe_add_host_route_for_addr(ip: &std::net::IpAddr) -> std::io::R
     Ok(())
 }
 
+/// Try to delete a previously added host-specific route for a unicast destination.
+/// Best-effort: ignore failures when the route is already gone.
+pub(crate) fn maybe_delete_host_route_for_addr(ip: &std::net::IpAddr) -> std::io::Result<()> {
+    let default_interface =
+        get_outbound_interface().ok_or(new_io_error("get default interface"))?;
+
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let out = std::process::Command::new("route")
+                .arg("delete")
+                .arg("-host")
+                .arg(v4.to_string())
+                .arg("-ifscope")
+                .arg(&default_interface.name)
+                .output()?;
+            warn!(
+                "executing: route delete -host {} -ifscope {}",
+                v4, default_interface.name
+            );
+            if !out.status.success() {
+                // best-effort cleanup
+                let err = String::from_utf8_lossy(&out.stderr);
+                warn!(
+                    "failed to delete host route {} ifscope {}: {}",
+                    v4,
+                    default_interface.name,
+                    err.trim()
+                );
+            }
+        }
+        std::net::IpAddr::V6(v6) => {
+            let out = std::process::Command::new("route")
+                .arg("delete")
+                .arg("-inet6")
+                .arg("-host")
+                .arg(v6.to_string())
+                .arg("-ifscope")
+                .arg(&default_interface.name)
+                .output()?;
+            warn!(
+                "executing: route delete -inet6 -host {} -ifscope {}",
+                v6, default_interface.name
+            );
+            if !out.status.success() {
+                let err = String::from_utf8_lossy(&out.stderr);
+                warn!(
+                    "failed to delete ipv6 host route {} ifscope {}: {}",
+                    v6,
+                    default_interface.name,
+                    err.trim()
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// failing to delete the default route won't cause route failure
 pub fn maybe_routes_clean_up(_: &TunConfig) -> std::io::Result<()> {
     let (gateway_v4, gateway_v6) = get_default_gateway()?;

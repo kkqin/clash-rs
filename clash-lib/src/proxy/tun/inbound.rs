@@ -189,6 +189,12 @@ pub fn get_runner(
                     error!("failed to clean up routes: {}", e);
                 }
             }
+
+            #[cfg(target_os = "macos")]
+            {
+                // Also remove any host routes we added for DNS servers, etc.
+                routes::cleanup_host_routes();
+            }
         }
 
         let so_mark = cfg.so_mark;
