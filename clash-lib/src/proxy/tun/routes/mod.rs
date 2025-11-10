@@ -90,8 +90,16 @@ pub fn cleanup_host_routes() {
 async fn reapply_host_routes() {
     let ips: Vec<IpAddr> = HOST_ROUTE_REGISTRY.read().await.iter().cloned().collect();
     for ip in ips {
-        // best-effort
-        let _ = macos::maybe_add_host_route_for_addr(&ip);
+        // Force refresh: delete then add to move to the new default interface/gateway.
+        #[cfg(target_os = "macos")]
+        {
+            let _ = macos::maybe_delete_host_route_for_addr(&ip);
+            let _ = macos::maybe_add_host_route_for_addr(&ip);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = ip; // no-op on other platforms
+        }
     }
 }
 
