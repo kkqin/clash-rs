@@ -40,14 +40,16 @@ impl AeadCipher {
     }
 
     pub fn decrypt_inplace(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
-        let mut nonce = self.nonce;
-        let security = &self.security;
-        let iv = &self.iv;
-        let count = &mut self.count;
+    let mut nonce = self.nonce;
+    let security = &self.security;
+    let iv = &self.iv;
+    let count = &mut self.count;
 
-        nonce[..2].copy_from_slice(&count.to_be_bytes());
-        nonce[2..12].copy_from_slice(&iv[2..12]);
-        *count += 1;
+    nonce[..2].copy_from_slice(&count.to_be_bytes());
+    nonce[2..12].copy_from_slice(&iv[2..12]);
+    // Avoid debug overflow panic; VMess uses a 16-bit counter in the nonce.
+    // Wrap around on overflow to match modulo semantics.
+    *count = count.wrapping_add(1);
 
         let nonce = &nonce[..security.nonce_len()];
         match security {
@@ -77,14 +79,16 @@ impl AeadCipher {
     }
 
     pub fn encrypt_inplace(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
-        let mut nonce = self.nonce;
-        let security = &self.security;
-        let iv = &self.iv;
-        let count = &mut self.count;
+    let mut nonce = self.nonce;
+    let security = &self.security;
+    let iv = &self.iv;
+    let count = &mut self.count;
 
-        nonce[..2].copy_from_slice(&count.to_be_bytes());
-        nonce[2..12].copy_from_slice(&iv[2..12]);
-        *count += 1;
+    nonce[..2].copy_from_slice(&count.to_be_bytes());
+    nonce[2..12].copy_from_slice(&iv[2..12]);
+    // Avoid debug overflow panic; VMess uses a 16-bit counter in the nonce.
+    // Wrap around on overflow to match modulo semantics.
+    *count = count.wrapping_add(1);
 
         let nonce = &nonce[..security.nonce_len()];
         match security {
@@ -97,5 +101,33 @@ impl AeadCipher {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::crypto::AeadCipherHelper;
+
+    #[test]
+    fn aead_counter_wraps_without_panic() {
+        // Prepare a fixed key/iv; sizes are per VMess AEAD expectations
+        let key = [0u8; 16];
+        let iv = [1u8; 16];
+
+        let security = VmessSecurity::Aes128Gcm(Aes128Gcm::new_with_slice(&key));
+        let mut cipher = AeadCipher::new(&iv, security);
+
+        // Force the counter to max to exercise wrapping behavior
+        cipher.count = u16::MAX;
+
+        // Buffer must include space for tag only (no plaintext)
+        let mut buf = vec![0u8; cipher.security.overhead_len()];
+
+        // Should not panic in debug builds and should succeed
+        cipher.encrypt_inplace(&mut buf).expect("encrypt_inplace should succeed");
+
+        // After wrapping add, count becomes 0
+        assert_eq!(cipher.count, 0);
     }
 }
