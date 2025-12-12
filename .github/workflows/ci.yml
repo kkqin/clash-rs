@@ -148,19 +148,19 @@ jobs:
             rustflags: "-Ctarget-feature=+crt-static --cfg tokio_unstable"
             no-test: true
           # MacOSX
-          - os: macos-14
+          - os: macos-latest
             target: x86_64-apple-darwin
             extra-args: -F "plus"
-          - os: macos-14
+          - os: macos-latest
             target: aarch64-apple-darwin
             extra-args: -F "plus"
           # MacOSX static-crt
-          - os: macos-14
+          - os: macos-latest
             target: x86_64-apple-darwin
             release-name: x86_64-apple-darwin-static-crt
             extra-args: -F "plus"
             rustflags: "-Ctarget-feature=+crt-static --cfg tokio_unstable"
-          - os: macos-14
+          - os: macos-latest
             target: aarch64-apple-darwin
             release-name: aarch64-apple-darwin-static-crt
             tool: cargo
@@ -187,7 +187,7 @@ jobs:
           # Windows gnu: tokio dont work
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           submodules: true
       - uses: actions/cache@v4
@@ -302,7 +302,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -387,7 +387,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           submodules: true
 
