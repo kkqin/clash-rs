@@ -603,7 +603,7 @@ impl Client for DnsClient {
         };
 
         // Clone client handle out of the lock if possible
-        let (first_try, client_clone) = {
+        let (first_try, _client_clone) = {
             let inner = self.inner.read().await;
             let client = inner.c.as_ref().unwrap().clone();
             (send_once(client.clone(), req.clone()).await, client)

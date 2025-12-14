@@ -226,6 +226,15 @@ impl Dispatcher {
         let mode = self.mode.clone();
         let manager = self.manager.clone();
 
+        // Capacity for UDP forwarding channels.
+        // Tunable via env var `CLASH_UDP_CHAN_CAP` (default: 512).
+        fn udp_channel_capacity() -> usize {
+            std::env::var("CLASH_UDP_CHAN_CAP")
+                .ok()
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(512)
+        }
+
         #[rustfmt::skip]
         /*
          *  implement details
@@ -246,7 +255,7 @@ impl Dispatcher {
          */
         let (mut local_w, mut local_r) = udp_inbound.split();
         let (remote_receiver_w, mut remote_receiver_r) =
-            tokio::sync::mpsc::channel(32);
+            tokio::sync::mpsc::channel(udp_channel_capacity());
 
         let s = sess.clone();
         let ss = sess.clone();
@@ -344,7 +353,7 @@ impl Dispatcher {
 
                         let (mut remote_w, mut remote_r) = outbound_datagram.split();
                         let (remote_sender, mut remote_forwarder) =
-                            tokio::sync::mpsc::channel::<UdpPacket>(32);
+                            tokio::sync::mpsc::channel::<UdpPacket>(udp_channel_capacity());
 
                         // remote -> local
                         let r_handle = tokio::spawn(async move {

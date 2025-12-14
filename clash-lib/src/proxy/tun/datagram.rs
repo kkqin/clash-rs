@@ -12,6 +12,15 @@ use futures::{Sink, Stream, ready};
 use std::{sync::Arc, task::Poll};
 use tracing::{debug, trace, warn};
 
+// Capacity for UDP mpsc channels between TUN and dispatcher.
+// Can be tuned via env var `CLASH_UDP_CHAN_CAP` (e.g., 512 or 1024).
+fn udp_channel_capacity() -> usize {
+    std::env::var("CLASH_UDP_CHAN_CAP")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(512)
+}
+
 pub(crate) async fn handle_inbound_datagram(
     socket: watfaq_netstack::UdpSocket,
     dispatcher: Arc<Dispatcher>,
@@ -29,10 +38,12 @@ pub(crate) async fn handle_inbound_datagram(
     // dispatcher <-> tun communications
     // l_tx: dispatcher write packet responded from remote proxy
     // l_rx: in fut1 items are forwarded to ls
-    let (l_tx, mut l_rx) = tokio::sync::mpsc::channel::<UdpPacket>(32);
+    let (l_tx, mut l_rx) =
+        tokio::sync::mpsc::channel::<UdpPacket>(udp_channel_capacity());
 
     // forward packets from tun to dispatcher
-    let (d_tx, d_rx) = tokio::sync::mpsc::channel::<UdpPacket>(32);
+    let (d_tx, d_rx) =
+        tokio::sync::mpsc::channel::<UdpPacket>(udp_channel_capacity());
 
     // for dispatcher - the dispatcher would receive packets from this channel,
     // which is from the stack and send back packets to this channel, which

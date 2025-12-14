@@ -1,6 +1,6 @@
 use hickory_proto::op::Message;
 
-use tracing::{debug, error, instrument, info, warn};
+use tracing::{error, instrument, info, warn};
 use std::time::Duration;
 use watfaq_dns::DNSListenAddr;
 
@@ -36,7 +36,6 @@ pub async fn get_dns_listener(
     resolver: ThreadSafeDNSResolver,
     cwd: &std::path::Path,
 ) -> Option<Runner> {
-    let listen = listen;
     let resolver = resolver;
     let cwd = cwd.to_path_buf();
 
