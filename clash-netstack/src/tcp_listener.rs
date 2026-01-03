@@ -207,7 +207,11 @@ impl TcpListener {
                     )));
 
                     socket.set_timeout(Some(smoltcp::time::Duration::from_secs(
-                        if cfg!(target_os = "linux") { 7200 } else { 60 },
+                        if cfg!(any(target_os = "linux", target_os = "macos", target_os = "windows")) {
+                            7200
+                        } else {
+                            60
+                        },
                     )));
                     // Default
                     socket.set_ack_delay(Some(Duration::from_millis(10).into()));
@@ -251,6 +255,12 @@ impl TcpListener {
             }
 
             // trigger another poll to drive the socket state machine
+
+            // Hint the device to poll sockets soon and yield to improve fairness under load
+            if let Err(e) = iface_notifier.send(IfaceEvent::DeviceReady) {
+                warn!("Failed to send device ready event: {e}");
+            }
+            tokio::task::yield_now().await;
             iface_notifier.send(IfaceEvent::DeviceReady).map_err(|e| {
                 error!("Failed to send device ready event: {e}");
                 std::io::Error::other("Failed to send device ready event")
