@@ -314,7 +314,7 @@ impl DnsClient {
         // TODO: use proxy to connect?
         match &opts.net {
             DNSNetMode::Dhcp => {
-                Ok(Arc::new(DhcpClient::new(&opts.host, opts.fw_mark).await))
+                Ok(Arc::new(DhcpClient::new(&opts.host, opts.fw_mark).await) as ThreadSafeDNSClient)
             }
 
             other => {
@@ -370,7 +370,7 @@ impl DnsClient {
                             net: opts.net,
                             iface: opts.iface,
                             ecs: opts.ecs.clone(),
-                        }))
+                        }) as ThreadSafeDNSClient)
                     }
                     DNSNetMode::Tcp => {
                         #[cfg(target_os = "macos")]
@@ -398,7 +398,7 @@ impl DnsClient {
                             net: opts.net,
                             iface: opts.iface,
                             ecs: opts.ecs.clone(),
-                        }))
+                        }) as ThreadSafeDNSClient)
                     }
                     DNSNetMode::DoT => {
                         #[cfg(target_os = "macos")]
@@ -427,7 +427,7 @@ impl DnsClient {
                             net: opts.net,
                             iface: opts.iface,
                             ecs: opts.ecs.clone(),
-                        }))
+                        }) as ThreadSafeDNSClient)
                     }
                     DNSNetMode::DoH => {
                         #[cfg(target_os = "macos")]
@@ -456,7 +456,7 @@ impl DnsClient {
                             net: opts.net,
                             iface: opts.iface,
                             ecs: opts.ecs.clone(),
-                        }))
+                        }) as ThreadSafeDNSClient)
                     }
                     _ => unreachable!("."),
                 }
@@ -578,11 +578,17 @@ impl Client for DnsClient {
 
             match &inner.bg_handle {
                 Some(bg) => {
-                    if bg.is_finished() {
-                        warn!(
-                            "dns client background task is finished, likely \
-                             connection closed, restarting a new one"
-                        );
+                    if bg.is_finished() || inner.c.is_none() {
+                        if bg.is_finished() {
+                            warn!(
+                                "dns client background task is finished, likely \
+                                 connection closed, restarting a new one"
+                            );
+                        } else {
+                            trace!(
+                                "dns client handle missing while background task running; initializing"
+                            );
+                        }
                         let (client, bg) = dns_stream_builder(&self.cfg).await?;
                         inner.c.replace(client);
                         inner.bg_handle.replace(bg);
@@ -615,12 +621,30 @@ impl Client for DnsClient {
             client.send(req).first_answer().await
         };
 
-        // Clone client handle out of the lock if possible
-        let (first_try, _client_clone) = {
+        // Acquire client handle safely
+        let client = {
             let inner = self.inner.read().await;
-            let client = inner.c.as_ref().unwrap().clone();
-            (send_once(client.clone(), req.clone()).await, client)
+            inner.c.as_ref().cloned()
         };
+        let client = match client {
+            Some(c) => c,
+            None => {
+                warn!(
+                    "dns client handle missing before send; attempting rebuild"
+                );
+                self.rebuild_client()
+                    .await
+                    .map_err(|e| Error::DNSError(e.to_string()))?;
+                let inner = self.inner.read().await;
+                inner
+                    .c
+                    .as_ref()
+                    .cloned()
+                    .ok_or_else(|| Error::DNSError("dns client init failed".to_string()))?
+            }
+        };
+
+        let first_try = send_once(client.clone(), req.clone()).await;
 
         match first_try {
             Ok(ans) => Ok(ans.into()),
@@ -633,8 +657,11 @@ impl Client for DnsClient {
                     }
 
                     // send again with fresh client
-                    let inner = self.inner.read().await;
-                    let client = inner.c.as_ref().unwrap().clone();
+                    let client = {
+                        let inner = self.inner.read().await;
+                        inner.c.as_ref().cloned()
+                    }
+                    .ok_or_else(|| Error::DNSError("dns client init failed".to_string()))?;
                     send_once(client, req)
                         .await
                         .map_err(|x| Error::DNSError(x.to_string()).into())
