@@ -9,6 +9,7 @@ pub mod ssh;
 #[cfg(feature = "onion")]
 pub mod tor;
 pub mod trojan;
+pub mod zdt;
 #[cfg(feature = "tuic")]
 pub mod tuic;
 mod utils;

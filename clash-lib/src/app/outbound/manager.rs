@@ -39,7 +39,7 @@ use crate::{
         group::smart,
         hysteria2, loadbalance, reject, relay,
         selector::{self, ThreadSafeSelectorControl},
-        socks, trojan, urltest,
+        socks, trojan, urltest, zdt,
         utils::{DirectConnector, ProxyConnector},
         vless, vmess,
     },
@@ -313,6 +313,15 @@ impl OutboundManager {
                         .map(|x: vless::Handler| Arc::new(x) as AnyOutboundHandler)
                         .inspect_err(|e| {
                             error!("failed to load vless outbound {}: {}", name, e);
+                        })
+                        .ok()
+                }
+                OutboundProxyProtocol::Zdt(z) => {
+                    let name = z.common_opts.name.clone();
+                    z.try_into()
+                        .map(|x: zdt::Handler| Arc::new(x) as AnyOutboundHandler)
+                        .inspect_err(|e| {
+                            error!("failed to load zdt outbound {}: {}", name, e);
                         })
                         .ok()
                 }

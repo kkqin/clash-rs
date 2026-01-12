@@ -64,6 +64,8 @@ pub enum OutboundProxyProtocol {
     Vmess(OutboundVmess),
     #[serde(rename = "vless")]
     Vless(OutboundVless),
+    #[serde(rename = "zdt")]
+    Zdt(OutboundZdt),
     #[cfg(feature = "wireguard")]
     #[serde(rename = "wireguard")]
     Wireguard(OutboundWireguard),
@@ -94,6 +96,7 @@ impl OutboundProxyProtocol {
             OutboundProxyProtocol::Trojan(trojan) => &trojan.common_opts.name,
             OutboundProxyProtocol::Vmess(vmess) => &vmess.common_opts.name,
             OutboundProxyProtocol::Vless(vless) => &vless.common_opts.name,
+            OutboundProxyProtocol::Zdt(zdt) => &zdt.common_opts.name,
             #[cfg(feature = "wireguard")]
             OutboundProxyProtocol::Wireguard(wireguard) => {
                 &wireguard.common_opts.name
@@ -138,6 +141,7 @@ impl Display for OutboundProxyProtocol {
             OutboundProxyProtocol::Trojan(_) => write!(f, "Trojan"),
             OutboundProxyProtocol::Vmess(_) => write!(f, "Vmess"),
             OutboundProxyProtocol::Vless(_) => write!(f, "Vless"),
+            OutboundProxyProtocol::Zdt(_) => write!(f, "Zdt"),
             #[cfg(feature = "wireguard")]
             OutboundProxyProtocol::Wireguard(_) => write!(f, "Wireguard"),
             #[cfg(feature = "onion")]
@@ -241,6 +245,23 @@ pub struct OutboundTrojan {
     pub udp: Option<bool>,
     pub network: Option<String>,
     pub grpc_opts: Option<GrpcOpt>,
+    pub ws_opts: Option<WsOpt>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Default)]
+#[serde(rename_all = "kebab-case")]
+pub struct OutboundZdt {
+    #[serde(flatten)]
+    pub common_opts: CommonConfigOptions,
+    pub security: String,
+    pub key: String,
+    pub salt: String,
+    pub iv: String,
+    pub udp: Option<bool>,
+    pub tls: Option<bool>,
+    pub skip_cert_verify: Option<bool>,
+    pub sni: Option<String>,
+    pub network: Option<String>,
     pub ws_opts: Option<WsOpt>,
 }
 

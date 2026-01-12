@@ -152,6 +152,10 @@ impl ProxySetProvider {
                                     let h: hysteria2::Handler = h.try_into()?;
                                     Ok(Arc::new(h) as _)
                                 }
+                                OutboundProxyProtocol::Zdt(z) => {
+                                    let h: crate::proxy::zdt::Handler = z.try_into()?;
+                                    Ok(Arc::new(h) as _)
+                                }
                                 #[cfg(feature = "ssh")]
                                 OutboundProxyProtocol::Ssh(s) => {
                                     let h: ssh::Handler = s.try_into()?;

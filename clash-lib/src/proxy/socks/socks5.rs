@@ -14,7 +14,7 @@ pub(crate) mod auth_methods {
     pub const NO_METHODS: u8 = 0xff;
 }
 
-pub(crate) mod socks_command {
+pub mod socks_command {
     pub const CONNECT: u8 = 0x01;
     // pub const BIND: u8 = 0x02;
     pub const UDP_ASSOCIATE: u8 = 0x3;
@@ -44,7 +44,7 @@ const ERROR_CODE_LOOKUP: &[&str] = &[
     "address type not supported",
 ];
 
-pub(crate) async fn client_handshake(
+pub async fn client_handshake(
     s: &mut AnyStream,
     addr: &SocksAddr,
     command: u8,

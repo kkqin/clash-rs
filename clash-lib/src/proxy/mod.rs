@@ -57,6 +57,8 @@ pub mod vmess;
 #[cfg(feature = "wireguard")]
 pub mod wg;
 
+pub mod zdt;
+
 pub mod group;
 pub use group::{fallback, loadbalance, relay, selector, urltest};
 
@@ -130,6 +132,7 @@ pub enum OutboundType {
     Hysteria2,
     Ssh,
     ShadowQuic,
+    Zdt,
 
     #[serde(rename = "URLTest")]
     UrlTest,
@@ -157,6 +160,7 @@ impl Display for OutboundType {
             OutboundType::Hysteria2 => write!(f, "Hysteria2"),
             OutboundType::Ssh => write!(f, "ssh"),
             OutboundType::ShadowQuic => write!(f, "ShadowQuic"),
+            OutboundType::Zdt => write!(f, "Zdt"),
 
             OutboundType::UrlTest => write!(f, "URLTest"),
             OutboundType::Selector => write!(f, "Selector"),

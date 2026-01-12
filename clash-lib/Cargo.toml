@@ -193,6 +193,8 @@ downcast-rs = "2.0"
 
 # workaround for https://github.com/cross-rs/cross/issues/16
 aws-lc-rs = { version = "1", default-features = false, optional = true, features = ["bindgen"] }
+block-padding = "0.4.2"
+cbc = "0.1.2"
 
 [dev-dependencies]
 tempfile = "3.23"
