@@ -1,4 +1,4 @@
-use super::dns_client::DNSNetMode;
+pub use super::dns_client::DNSNetMode;
 use crate::{
     Error,
     app::net::{OutboundInterface, get_interface_by_name, get_outbound_interface},
@@ -15,7 +15,7 @@ use std::{
     sync::Arc,
 };
 use url::Url;
-use watfaq_dns::{DNSListenAddr, DoH3Config, DoHConfig, DoTConfig};
+pub use watfaq_dns::{DNSListenAddr, DoH3Config, DoHConfig, DoTConfig};
 
 #[derive(Clone, Debug)]
 pub struct NameServer {

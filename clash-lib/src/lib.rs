@@ -1,35 +1,34 @@
 #![feature(cfg_version)]
 #![feature(ip)]
 #![feature(sync_unsafe_cell)]
-#![feature(lazy_get)]
 #![feature(duration_millis_float)]
 #![cfg_attr(not(version("1.87.0")), feature(unbounded_shifts))]
 #![cfg_attr(not(version("1.88.0")), feature(let_chains))]
+#![cfg_attr(not(version("1.94.0")), feature(lazy_get))]
 
 use crate::{
     app::{
-        dispatcher::Dispatcher, dns, inbound::manager::InboundManager,
-        outbound::manager::OutboundManager, router::Router,
+        dispatcher::{Dispatcher, StatisticsManager},
+        dns,
+        dns::{SystemResolver, ThreadSafeDNSResolver},
+        inbound::manager::InboundManager,
+        logging::LogEvent,
+        net::init_net_config,
+        outbound::manager::OutboundManager,
+        profile,
+        router::Router,
     },
     common::{
+        auth,
         geodata::{DEFAULT_GEOSITE_DOWNLOAD_URL, GeoDataLookup},
+        http::new_http_client,
+        mmdb,
         mmdb::{DEFAULT_ASN_MMDB_DOWNLOAD_URL, DEFAULT_COUNTRY_MMDB_DOWNLOAD_URL},
     },
-    config::{
-        def,
-        internal::{InternalConfig, proxy::OutboundProxy},
-    },
+    config::{InternalConfig, def, def::LogLevel, internal::proxy::OutboundProxy},
     proxy::OutboundHandler,
 };
-use app::{
-    dispatcher::StatisticsManager,
-    dns::{SystemResolver, ThreadSafeDNSResolver},
-    logging::LogEvent,
-    net::init_net_config,
-    profile,
-};
-use common::{auth, http::new_http_client, mmdb};
-use config::def::LogLevel;
+
 #[cfg(feature = "tun")]
 use proxy::tun::get_tun_runner;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -47,12 +46,10 @@ use tokio::{
 };
 use tracing::{debug, error, info};
 
-mod app;
-mod common;
-#[cfg(feature = "internal")]
+pub mod app;
 pub mod config;
-#[cfg(not(feature = "internal"))]
-mod config;
+
+mod common;
 mod proxy;
 mod session;
 
@@ -208,15 +205,11 @@ pub fn setup_default_crypto_provider() {
     CRYPTO_PROVIDER_LOCK.get_or_init(|| {
         #[cfg(feature = "aws-lc-rs")]
         {
-            rustls::crypto::aws_lc_rs::default_provider()
-                .install_default()
-                .unwrap()
+            _ = rustls::crypto::aws_lc_rs::default_provider().install_default()
         }
         #[cfg(feature = "ring")]
         {
-            rustls::crypto::ring::default_provider()
-                .install_default()
-                .unwrap()
+            _ = rustls::crypto::ring::default_provider().install_default()
         }
     });
 }
