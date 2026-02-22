@@ -186,6 +186,39 @@ pub fn start_scaffold(opts: Options) -> Result<()> {
     })
 }
 
+pub fn start_scaffold_with_tun_fd(opts: Options, tun_fd: u32) -> Result<()> {
+    let rt = match opts.rt.as_ref().unwrap_or(&TokioRuntime::MultiThread) {
+        TokioRuntime::MultiThread => tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?,
+        TokioRuntime::SingleThread => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?,
+    };
+    let config: InternalConfig = opts.config.try_parse()?;
+    let cwd = opts.cwd.unwrap_or_else(|| ".".to_string());
+    let (log_tx, _) = broadcast::channel(100);
+
+    let log_collector = app::logging::EventCollector::new(vec![log_tx.clone()]);
+
+    app::logging::setup_logging(
+        config.general.log_level,
+        log_collector,
+        &cwd,
+        opts.log_file,
+    );
+
+    rt.block_on(async {
+        match start_with_tun_fd(config, cwd, log_tx, tun_fd).await {
+            Err(e) => {
+                eprintln!("start error: {e}");
+                Err(e)
+            }
+            Ok(_) => Ok(()),
+        }
+    })
+}
+
 pub fn shutdown() -> bool {
     let mut rt_ctrl = RUNTIME_CONTROLLER.lock().unwrap();
     if rt_ctrl
@@ -391,6 +424,27 @@ pub async fn start(
         error!("runtime error: {}, shutting down", x);
         x
     })
+}
+
+pub async fn start_with_tun_fd(
+    mut config: InternalConfig,
+    cwd: String,
+    log_tx: broadcast::Sender<LogEvent>,
+    tun_fd: u32,
+) -> Result<()> {
+    #[cfg(feature = "tun")]
+    {
+        config.tun.enable = true;
+        config.tun.device_id = format!("fd://{tun_fd}");
+        start(config, cwd, log_tx).await
+    }
+    #[cfg(not(feature = "tun"))]
+    {
+        let _ = (config, cwd, log_tx, tun_fd);
+        Err(Error::InvalidConfig(
+            "tun feature is disabled at compile time".to_string(),
+        ))
+    }
 }
 
 struct RuntimeComponents {

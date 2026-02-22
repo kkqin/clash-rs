@@ -1,4 +1,4 @@
-use clash_lib::{Config, Options, TokioRuntime, shutdown, start_scaffold};
+use clash_lib::{Config, Options, TokioRuntime, shutdown, start_scaffold, start_scaffold_with_tun_fd};
 use std::{
     ffi::{CStr, CString},
     os::raw::{c_char, c_int},
@@ -35,6 +35,50 @@ pub unsafe extern "C" fn clash_start(
         };
 
         match start_scaffold(options) {
+            Ok(_) => CString::new("").unwrap().into_raw(),
+            Err(e) => CString::new(format!("Error: {e}")).unwrap().into_raw(),
+        }
+    }
+}
+
+/// # Safety
+/// This function is unsafe because it dereferences raw pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn clash_start_with_tun_fd(
+    config: *const c_char,
+    log: *const c_char,
+    cwd: *const c_char,
+    multithread: c_int,
+    tun_fd: c_int,
+) -> *mut c_char {
+    unsafe {
+        let config_str = CStr::from_ptr(config)
+            .to_str()
+            .unwrap_or_default()
+            .to_string();
+        let log_str = CStr::from_ptr(log).to_str().unwrap_or_default().to_string();
+        let cwd_str = CStr::from_ptr(cwd).to_str().unwrap_or_default().to_string();
+
+        let rt = if multithread != 0 {
+            Some(TokioRuntime::MultiThread)
+        } else {
+            Some(TokioRuntime::SingleThread)
+        };
+
+        if tun_fd < 0 {
+            return CString::new("Error: tun_fd must be non-negative")
+                .unwrap()
+                .into_raw();
+        }
+
+        let options = Options {
+            config: Config::Str(config_str),
+            cwd: Some(cwd_str),
+            rt,
+            log_file: Some(log_str),
+        };
+
+        match start_scaffold_with_tun_fd(options, tun_fd as u32) {
             Ok(_) => CString::new("").unwrap().into_raw(),
             Err(e) => CString::new(format!("Error: {e}")).unwrap().into_raw(),
         }
