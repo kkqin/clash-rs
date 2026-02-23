@@ -82,6 +82,8 @@ impl TryFrom<&OutboundZdt> for Handler {
             udp: s.udp.unwrap_or_default(),
             tls,
             transport,
+            mux: s.mux.unwrap_or_default(),
+            mux_max_connections: s.mux_max_connections.unwrap_or(1),
         });
         Ok(h)
     }

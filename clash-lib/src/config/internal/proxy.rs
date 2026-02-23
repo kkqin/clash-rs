@@ -263,6 +263,8 @@ pub struct OutboundZdt {
     pub sni: Option<String>,
     pub network: Option<String>,
     pub ws_opts: Option<WsOpt>,
+    pub mux: Option<bool>,
+    pub mux_max_connections: Option<usize>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Default)]
