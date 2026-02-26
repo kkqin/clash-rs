@@ -314,7 +314,7 @@ impl DnsClient {
         // TODO: use proxy to connect?
         if matches!(opts.net, DNSNetMode::Dhcp) {
             let host = opts.host.to_string();
-            return Ok(Arc::new(DhcpClient::new(&host, opts.fw_mark).await));
+            return Ok(Arc::new(DhcpClient::new(&host, opts.fw_mark).await) as ThreadSafeDNSClient);
         }
 
         let mut ip: Option<IpAddr> = None;
