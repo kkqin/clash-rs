@@ -17,6 +17,25 @@ HEADER_FILE="${HEADERS_DIR}/${LIB_NAME}/${LIB_NAME}.h"
 MODULEMAP_FILE="${HEADERS_DIR}/${LIB_NAME}/module.modulemap"
 XCFRAMEWORK_DIR="${OUTPUT_DIR}/${LIB_NAME}.xcframework"
 
+# Build profile: release (default) or debug
+BUILD_PROFILE="${1:-release}"
+case "$BUILD_PROFILE" in
+    release)
+        CARGO_PROFILE_FLAG="--release"
+        TARGET_PROFILE_DIR="release"
+        ;;
+    debug)
+        CARGO_PROFILE_FLAG=""
+        TARGET_PROFILE_DIR="debug"
+        ;;
+    *)
+        echo "Usage: $0 [release|debug]"
+        exit 1
+        ;;
+esac
+
+echo "Build profile: $BUILD_PROFILE"
+
 # Ensure the toolchain from rust-toolchain.toml is installed and switched
 echo "Ensuring the Rust toolchain from rust-toolchain.toml is installed..."
 if [ -f "rust-toolchain.toml" ]; then
@@ -42,9 +61,9 @@ for target in "${IOS_ARCHS[@]}" "${MACOS_ARCHS[@]}"; do
     if [[ "$target" == *"ios"* ]]; then
         export IPHONEOS_DEPLOYMENT_TARGET=13.0
     fi
-    cargo +$TOOLCHAIN build --target "$target" --release
+    cargo +$TOOLCHAIN build --target "$target" $CARGO_PROFILE_FLAG
     mkdir -p "$OUTPUT_DIR/$target"
-    cp "target/$target/release/lib${LIB_NAME}.a" "$OUTPUT_DIR/$target/"
+    cp "target/$target/$TARGET_PROFILE_DIR/lib${LIB_NAME}.a" "$OUTPUT_DIR/$target/"
 done
 
 # Install necessary Rust targets
@@ -71,9 +90,9 @@ mkdir -p "$HEADERS_DIR"
 # Build for all targets
 echo "Building library for iOS and macOS targets..."
 for target in "${IOS_ARCHS[@]}" "${MACOS_ARCHS[@]}"; do
-    cargo +$TOOLCHAIN build --target "$target" --release
+    cargo +$TOOLCHAIN build --target "$target" $CARGO_PROFILE_FLAG
     mkdir -p "$OUTPUT_DIR/$target"
-    cp "target/$target/release/lib${LIB_NAME}.a" "$OUTPUT_DIR/$target/"
+    cp "target/$target/$TARGET_PROFILE_DIR/lib${LIB_NAME}.a" "$OUTPUT_DIR/$target/"
 done
 
 # Ensure directories for universal binaries
