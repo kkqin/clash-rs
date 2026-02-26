@@ -118,7 +118,7 @@ impl OutboundManager {
         m.init_handler_connectors().await?;
 
         // Subscribe to network-change events on macOS and trigger a quick healthcheck sweep
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", feature = "tun"))]
         {
             use crate::proxy::tun::routes::subscribe_netchange;
             let providers: Vec<ThreadSafeProxyProvider> =
