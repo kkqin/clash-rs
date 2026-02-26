@@ -1157,6 +1157,7 @@ dependencies = [
  "boring-noise",
  "byteorder",
  "bytes",
+ "cbc",
  "cfb-mode",
  "chacha20poly1305",
  "chrono",
