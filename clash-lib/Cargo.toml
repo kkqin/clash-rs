@@ -98,7 +98,7 @@ lru_time_cache = "0.11"
 uuid = { version = "1", features = ["v4", "fast-rng", "macro-diagnostics", "serde"] }
 network-interface = { version = "2" }
 base64 = "0.22"
-zstd = "0.13.3"
+zstd = "0.13"
 portable-atomic = { version = "1", features = ["serde"] }
 
 h2 = "0.4"
@@ -186,7 +186,7 @@ dirs = { version = "6.0", optional = true }
 totp-rs = { version = "^5.7", features = ["serde_support"], optional = true }
 
 # shadowquic
-shadowquic = { tag= "v0.2.3", optional = true, git = "https://github.com/spongebob888/shadowquic" }
+shadowquic = { version = "0.3.2", optional = true}
 
 # experimental
 downcast-rs = "2.0"
@@ -213,6 +213,7 @@ http-body-util = "0.1"
 
 [build-dependencies]
 prost-build = "0.14"
+protox = "0.9"
 
 [target.'cfg(any(target_os="linux", target_os="macos", target_os="windows"))'.dependencies]
 sock2proc = { git = "https://github.com/Watfaq/sock2proc.git", rev = "9f9e630" }
