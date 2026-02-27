@@ -652,7 +652,7 @@ async fn create_components(
 
 #[cfg(test)]
 mod tests {
-    use crate::{Config, Options, shutdown, start_scaffold};
+    use crate::{Config, Error, Options, shutdown, start_scaffold, start_scaffold_with_tun_fd};
     use std::{sync::Once, thread, time::Duration};
 
     static INIT: Once = Once::new();
@@ -691,5 +691,33 @@ mod tests {
         });
 
         handle.join().unwrap();
+    }
+
+    #[test]
+    //#[cfg(not(feature = "tun"))]
+    fn start_scaffold_with_tun_fd_requires_tun_feature() {
+        let conf = r#"
+        socks-port: 7891
+        bind-address: 127.0.0.1
+        mmdb: "tests/data/Country.mmdb"
+        proxies:
+          - {name: DIRECT_alias, type: direct}
+          - {name: REJECT_alias, type: reject}
+        "#;
+
+        let result = start_scaffold_with_tun_fd(
+            Options {
+                config: Config::Str(conf.to_string()),
+                cwd: None,
+                rt: None,
+                log_file: None,
+            },
+            3,
+        );
+
+        assert!(matches!(
+            result,
+            Err(Error::InvalidConfig(msg)) if msg.contains("tun feature is disabled")
+        ));
     }
 }

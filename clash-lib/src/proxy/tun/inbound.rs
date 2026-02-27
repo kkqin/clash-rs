@@ -10,9 +10,88 @@ use crate::{
     },
 };
 use futures::{SinkExt, StreamExt};
+use std::io::ErrorKind;
 use std::sync::Arc;
 use tracing::{debug, error, info, trace, warn};
 use url::Url;
+
+fn inspect_tun_packet(pkt: &[u8]) -> (bool, String) {
+    let head = pkt
+        .iter()
+        .take(16)
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if pkt.is_empty() {
+        return (false, "len=0 head=<empty>".to_string());
+    }
+
+    let v = pkt[0] >> 4;
+    if v == 4 {
+        let ihl = ((pkt[0] & 0x0f) as usize) * 4;
+        let looks_ok = pkt.len() >= 20 && ihl >= 20 && pkt.len() >= ihl;
+        return (
+            looks_ok,
+            format!(
+                "len={} ip_v4 ihl={} head=[{}]",
+                pkt.len(),
+                ihl,
+                head
+            ),
+        );
+    }
+
+    if v == 6 {
+        let looks_ok = pkt.len() >= 40;
+        return (
+            looks_ok,
+            format!("len={} ip_v6 head=[{}]", pkt.len(), head),
+        );
+    }
+
+    if pkt.len() >= 5 {
+        let af = u32::from_be_bytes([pkt[0], pkt[1], pkt[2], pkt[3]]);
+        let next_v = pkt[4] >> 4;
+        if af == 2 || af == 30 {
+            let looks_utun = (next_v == 4 && pkt.len() >= 24)
+                || (next_v == 6 && pkt.len() >= 44);
+            return (
+                false,
+                format!(
+                    "len={} utun_af={} next_ip_v={} maybe_utun_header={} head=[{}]",
+                    pkt.len(),
+                    af,
+                    next_v,
+                    looks_utun,
+                    head
+                ),
+            );
+        }
+    }
+
+    (
+        false,
+        format!(
+            "len={} unknown_prefix=0x{:02x} head=[{}]",
+            pkt.len(),
+            pkt[0],
+            head
+        ),
+    )
+}
+
+fn full_packet_hex(pkt: &[u8]) -> String {
+    pkt.iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn is_tun_send_temporary_error(err: &std::io::Error) -> bool {
+    matches!(err.kind(), ErrorKind::WouldBlock | ErrorKind::OutOfMemory)
+        || matches!(err.raw_os_error(), Some(55))
+}
 
 #[derive(Default)]
 struct TunInitializationConfig {
@@ -243,6 +322,7 @@ pub fn get_runner(
 
         // dispatcher -> stack -> tun
         futs.push(Box::pin(async move {
+            let mut temp_err_logged = 0usize;
             while let Some(pkt) = stack_stream.next().await {
                 match pkt {
                     Ok(pkt) => {
@@ -255,6 +335,16 @@ pub fn get_runner(
                             }
                         }
                         if let Err(e) = tun_sink.send(pkt.into_bytes()).await {
+                            if is_tun_send_temporary_error(&e) {
+                                if temp_err_logged < 10 {
+                                    temp_err_logged += 1;
+                                    warn!(
+                                        "temporary tun send error (dropping packet): {}",
+                                        e
+                                    );
+                                }
+                                continue;
+                            }
                             error!("failed to send pkt to tun: {}", e);
                             break;
                         }
@@ -271,13 +361,29 @@ pub fn get_runner(
 
         // tun -> stack -> dispatcher
         futs.push(Box::pin(async move {
+            let mut suspicious_logged = 0usize;
             while let Some(pkt) = tun_stream.next().await {
                 match pkt {
                     Ok(pkt) => {
+                        let (is_likely_ip, pkt_desc) = inspect_tun_packet(pkt.as_ref());
+                        let full_hex = full_packet_hex(pkt.as_ref());
+                        if !is_likely_ip && suspicious_logged < 30 {
+                            suspicious_logged += 1;
+                            warn!(
+                                "tun packet is not recognized as raw IP ({}): {} | full=[{}]",
+                                suspicious_logged, pkt_desc, full_hex
+                            );
+                        } else {
+                            trace!("tun packet: {}", pkt_desc);
+                        }
+
                         if let Err(e) =
                             stack_sink.send(watfaq_netstack::Packet::new(pkt)).await
                         {
-                            error!("failed to send pkt to stack: {}", e);
+                            error!(
+                                "failed to send pkt to stack: {}. packet: {} | full=[{}]",
+                                e, pkt_desc, full_hex
+                            );
                             break;
                         }
                     }
@@ -287,6 +393,8 @@ pub fn get_runner(
                     }
                 }
             }
+
+            warn!("tun stream ended (EOF). fd/pipe peer may be closed");
 
             Err(Error::Operation("tun stopped unexpectedly 1".to_string()))
         }));

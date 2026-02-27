@@ -1,7 +1,7 @@
 language = "C"
 
 [export]
-include = ["clash_start", "clash_shutdown", "clash_free_string"]
+include = ["clash_start", "clash_shutdown", "clash_start_with_tun_fd", "clash_free_string"]
 
 [parse]
 parse_deps = false

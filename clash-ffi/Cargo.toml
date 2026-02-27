@@ -10,3 +10,12 @@ clash-lib = { path = "../clash-lib", default-features = false, features = ["shad
 [lib]
 name = "clashrs"
 crate-type = ["staticlib", "cdylib"]
+
+[profile.dev]
+opt-level = 0
+debug = true
+strip = false
+
+[profile.release]
+debug = true
+strip = false

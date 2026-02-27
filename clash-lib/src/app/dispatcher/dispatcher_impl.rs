@@ -263,6 +263,7 @@ impl Dispatcher {
             while let Some(mut packet) = local_r.next().await {
                 let mut sess = sess.clone();
 
+                let src_addr = packet.src_addr.clone().must_into_socket_addr();
                 let dest = match reverse_lookup(&resolver, &packet.dst_addr).await {
                     Some(dest) => dest,
                     None => {
@@ -273,7 +274,7 @@ impl Dispatcher {
 
                 // for TUN or Tproxy, we need the original destination address
                 let orig_dest = packet.dst_addr.clone();
-                sess.source = packet.src_addr.clone().must_into_socket_addr();
+                sess.source = src_addr;
                 sess.destination = dest.clone();
 
                 // mutate packet for fake ip
@@ -320,11 +321,8 @@ impl Dispatcher {
                 match outbound_handle_guard
                     .get_outbound_sender_mut(
                         &outbound_name,
-                        packet.src_addr.clone().must_into_socket_addr(), /* this is only
-                                                                          * expected to be
-                                                                          * socket addr as it's
-                                                                          * from local
-                                                                          * udp */
+                        src_addr, /* this is only expected to be socket addr as it's from
+                                    * local udp */
                     )
                     .await
                 {
@@ -388,6 +386,13 @@ impl Dispatcher {
                                             "failed to send packet to remote: \
                                              {err:?}"
                                         );
+                                        if matches!(
+                                            err.kind(),
+                                            std::io::ErrorKind::AddrNotAvailable
+                                                | std::io::ErrorKind::NetworkUnreachable
+                                        ) {
+                                            break;
+                                        }
                                     }
                                 }
                             }
@@ -396,7 +401,7 @@ impl Dispatcher {
                         outbound_handle_guard
                             .insert(
                                 &outbound_name,
-                                packet.src_addr.clone().must_into_socket_addr(),
+                                src_addr,
                                 r_handle,
                                 w_handle,
                                 remote_sender.clone(),
@@ -407,6 +412,9 @@ impl Dispatcher {
                             Ok(_) => {}
                             Err(err) => {
                                 error!("failed to send packet to remote: {}", err);
+                                outbound_handle_guard
+                                    .remove(&outbound_name, src_addr)
+                                    .await;
                             }
                         };
                     }
@@ -417,6 +425,9 @@ impl Dispatcher {
                         }
                         Err(err) => {
                             error!("failed to send packet to remote: {}", err);
+                            outbound_handle_guard
+                                .remove(&outbound_name, src_addr)
+                                .await;
                         }
                     },
                 };
@@ -581,6 +592,11 @@ impl TimeoutUdpSessionManager {
         let mut map = self.map.write().await;
         map.get_outbound_sender_mut(outbound_name, src_addr)
     }
+
+    async fn remove(&self, outbound_name: &str, src_addr: SocketAddr) -> bool {
+        let mut map = self.map.write().await;
+        map.remove(outbound_name, src_addr)
+    }
 }
 
 type OutboundHandleKey = (String, SocketAddr);
@@ -627,6 +643,18 @@ impl OutboundHandleMap {
                 sender.clone()
             },
         )
+    }
+
+    fn remove(&mut self, outbound_name: &str, src_addr: SocketAddr) -> bool {
+        if let Some((recv_handle, send_handle, _, _)) =
+            self.0.remove(&(outbound_name.to_string(), src_addr))
+        {
+            recv_handle.abort();
+            send_handle.abort();
+            true
+        } else {
+            false
+        }
     }
 }
 
