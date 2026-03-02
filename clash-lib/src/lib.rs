@@ -154,12 +154,21 @@ static RUNTIME_CONTROLLER: LazyLock<std::sync::Mutex<RuntimeController>> =
     LazyLock::new(|| std::sync::Mutex::new(RuntimeController::new()));
 
 pub fn start_scaffold(opts: Options) -> Result<()> {
+    // Use smaller stack size for iOS/mobile platforms to avoid OOM
+    // Default is 2MB, which is too large for iOS with multiple threads
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    const THREAD_STACK_SIZE: usize = 256 * 1024; // 256 KB for mobile
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    const THREAD_STACK_SIZE: usize = 2 * 1024 * 1024; // 2 MB for desktop
+
     let rt = match opts.rt.as_ref().unwrap_or(&TokioRuntime::MultiThread) {
         TokioRuntime::MultiThread => tokio::runtime::Builder::new_multi_thread()
             .enable_all()
+            .thread_stack_size(THREAD_STACK_SIZE)
             .build()?,
         TokioRuntime::SingleThread => tokio::runtime::Builder::new_current_thread()
             .enable_all()
+            .thread_stack_size(THREAD_STACK_SIZE)
             .build()?,
     };
     let config: InternalConfig = opts.config.try_parse()?;
@@ -187,12 +196,21 @@ pub fn start_scaffold(opts: Options) -> Result<()> {
 }
 
 pub fn start_scaffold_with_tun_fd(opts: Options, tun_fd: u32) -> Result<()> {
+    // Use smaller stack size for iOS/mobile platforms to avoid OOM
+    // Default is 2MB, which is too large for iOS with multiple threads
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    const THREAD_STACK_SIZE: usize = 256 * 1024; // 256 KB for mobile
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    const THREAD_STACK_SIZE: usize = 2 * 1024 * 1024; // 2 MB for desktop
+
     let rt = match opts.rt.as_ref().unwrap_or(&TokioRuntime::MultiThread) {
         TokioRuntime::MultiThread => tokio::runtime::Builder::new_multi_thread()
             .enable_all()
+            .thread_stack_size(THREAD_STACK_SIZE)
             .build()?,
         TokioRuntime::SingleThread => tokio::runtime::Builder::new_current_thread()
             .enable_all()
+            .thread_stack_size(THREAD_STACK_SIZE)
             .build()?,
     };
     let config: InternalConfig = opts.config.try_parse()?;

@@ -28,7 +28,16 @@ use crate::app::dns::ThreadSafeDNSResolver;
 
 use super::statistics_manager::Manager;
 
+#[cfg(target_os = "ios")]
+const DEFAULT_BUFFER_SIZE: usize = 4 * 1024;
+#[cfg(not(target_os = "ios"))]
 const DEFAULT_BUFFER_SIZE: usize = 16 * 1024;
+
+// Limit concurrent connections on iOS to prevent memory exhaustion
+#[cfg(target_os = "ios")]
+const MAX_CONCURRENT_CONNECTIONS: usize = 1000;
+#[cfg(not(target_os = "ios"))]
+const MAX_CONCURRENT_CONNECTIONS: usize = 1000;
 
 pub struct Dispatcher {
     outbound_manager: ThreadSafeOutboundManager,
@@ -37,6 +46,7 @@ pub struct Dispatcher {
     mode: Arc<RwLock<RunMode>>,
     manager: Arc<Manager>,
     tcp_buffer_size: usize,
+    connection_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl Debug for Dispatcher {
@@ -61,6 +71,9 @@ impl Dispatcher {
             mode: Arc::new(RwLock::new(mode)),
             manager: statistics_manager,
             tcp_buffer_size: tcp_buffer_size.unwrap_or(DEFAULT_BUFFER_SIZE),
+            connection_semaphore: Arc::new(tokio::sync::Semaphore::new(
+                MAX_CONCURRENT_CONNECTIONS,
+            )),
         }
     }
 
@@ -88,6 +101,15 @@ impl Dispatcher {
                     return;
                 }
             };
+
+        // Acquire connection permit (semaphore) to limit concurrent connections
+        let _permit = match self.connection_semaphore.acquire().await {
+            Ok(permit) => permit,
+            Err(_) => {
+                error!("failed to acquire connection permit for {}", sess);
+                return;
+            }
+        };
 
         sess.destination = dest.clone();
 
@@ -225,14 +247,19 @@ impl Dispatcher {
         let resolver = self.resolver.clone();
         let mode = self.mode.clone();
         let manager = self.manager.clone();
+        let connection_semaphore = self.connection_semaphore.clone();
 
         // Capacity for UDP forwarding channels.
         // Tunable via env var `CLASH_UDP_CHAN_CAP` (default: 512).
         fn udp_channel_capacity() -> usize {
-            std::env::var("CLASH_UDP_CHAN_CAP")
-                .ok()
-                .and_then(|s| s.parse::<usize>().ok())
-                .unwrap_or(512)
+            #[cfg(target_os = "ios")]
+            {
+                64 // Limit channel capacity on iOS to reduce memory usage
+            }
+            #[cfg(not(target_os = "ios"))]
+            {
+                512
+            }
         }
 
         #[rustfmt::skip]
@@ -322,7 +349,7 @@ impl Dispatcher {
                     .get_outbound_sender_mut(
                         &outbound_name,
                         src_addr, /* this is only expected to be socket addr as it's from
-                                    * local udp */
+                                   * local udp */
                     )
                     .await
                 {
@@ -351,7 +378,9 @@ impl Dispatcher {
 
                         let (mut remote_w, mut remote_r) = outbound_datagram.split();
                         let (remote_sender, mut remote_forwarder) =
-                            tokio::sync::mpsc::channel::<UdpPacket>(udp_channel_capacity());
+                            tokio::sync::mpsc::channel::<UdpPacket>(
+                                udp_channel_capacity(),
+                            );
 
                         // remote -> local
                         let r_handle = tokio::spawn(async move {
@@ -452,13 +481,26 @@ impl Dispatcher {
         let (close_sender, close_receiver) = tokio::sync::oneshot::channel::<u8>();
 
         tokio::spawn(async move {
+            // Acquire permit when session starts, release when closes
+            let _permit = match connection_semaphore.acquire().await {
+                Ok(p) => {
+                    debug!("acquired UDP connection permit");
+                    p
+                }
+                Err(_) => {
+                    error!("failed to acquire UDP connection permit");
+                    return;
+                }
+            };
+
             if close_receiver.await.is_ok() {
-                trace!("UDP close signal for {} received", s);
+                trace!("UDP close signal for {} received, permit releasing", s);
                 t1.abort();
                 t2.abort();
             } else {
                 error!("UDP close signal dropped!");
             }
+            // permit dropped here when task ends
         });
 
         close_sender

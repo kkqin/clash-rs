@@ -457,6 +457,9 @@ where
     A: AsyncRead + AsyncWrite + Unpin + ?Sized,
     B: AsyncRead + AsyncWrite + Unpin + ?Sized,
 {
+    #[cfg(target_os = "ios")]
+    let idle_timeout_duration = Duration::from_secs(15);
+    #[cfg(not(target_os = "ios"))]
     let idle_timeout_duration = Duration::from_secs(60);
     CopyBidirectional {
         a,

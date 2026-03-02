@@ -152,25 +152,34 @@ impl Config {
             }
 
             let net = net.parse()?;
+
+            // On iOS, skip interface resolution for DNS nameservers.
+            // NEPacketTunnelProvider automatically routes the VPN extension's
+            // own connections through the physical interface, not TUN.
+            #[cfg(target_os = "ios")]
+            let resolved_iface = None;
+            #[cfg(not(target_os = "ios"))]
+            let resolved_iface = iface
+                .map(|x| match x.as_str() {
+                    "auto" => {
+                        get_outbound_interface().ok_or(Error::InvalidConfig(
+                            "DNS nameserver [auto] no outbound interface found"
+                                .into(),
+                        ))
+                    }
+                    name => get_interface_by_name(name).ok_or(
+                        Error::InvalidConfig(format!(
+                            "DNS nameserver [{i}] invalid interface: {name}"
+                        )),
+                    ),
+                })
+                .transpose()?;
+
             nameservers.push(NameServer {
                 host: host.to_owned(),
                 port,
                 net,
-                interface: iface
-                    .map(|x| match x.as_str() {
-                        "auto" => {
-                            get_outbound_interface().ok_or(Error::InvalidConfig(
-                                "DNS nameserver [auto] no outbound interface found"
-                                    .into(),
-                            ))
-                        }
-                        name => get_interface_by_name(name).ok_or(
-                            Error::InvalidConfig(format!(
-                                "DNS nameserver [{i}] invalid interface: {name}"
-                            )),
-                        ),
-                    })
-                    .transpose()?,
+                interface: resolved_iface,
                 proxy,
             });
         }

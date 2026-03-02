@@ -21,7 +21,13 @@ pub static TUN_SOMARK: LazyLock<tokio::sync::RwLock<Option<u32>>> =
 /// This function should be called as early as possible
 /// so that other config initialization can use the default outbound interface
 pub async fn init_net_config(tun_somark: Option<u32>) {
-    *DEFAULT_OUTBOUND_INTERFACE.write().await = get_outbound_interface();
+    // On iOS, skip outbound interface detection.
+    // NEPacketTunnelProvider automatically excludes the extension process's
+    // own connections from TUN routing, so interface binding is unnecessary.
+    #[cfg(not(target_os = "ios"))]
+    {
+        *DEFAULT_OUTBOUND_INTERFACE.write().await = get_outbound_interface();
+    }
     *TUN_SOMARK.write().await = tun_somark;
 
     trace!(
@@ -148,12 +154,6 @@ pub fn get_outbound_interface() -> Option<OutboundInterface> {
             "wlan",  // Android Wi-Fi interface
             "rmnet", // Android mobile data interface
         ]
-    } else if cfg!(target_os = "ios") {
-        // iOS common interface names:
-        // - en0: Wi-Fi
-        // - pdp_ip0/pdp_ipX: cellular (multiple PDP contexts may exist)
-        // Prefer Wi-Fi when it has a usable IP, otherwise fall back to cellular.
-        &["en0", "en", "pdp_ip"]
     } else if cfg!(target_os = "windows") {
         &["Ethernet", "Wi-Fi", "Tailscale"]
     } else if cfg!(target_os = "linux") {
@@ -165,71 +165,6 @@ pub fn get_outbound_interface() -> Option<OutboundInterface> {
     };
 
     all_outbounds.sort_by(|left, right| {
-        fn v6_rank(addr: Option<Ipv6Addr>) -> u8 {
-            match addr {
-                Some(ip) if ip.is_unicast_global() => 0,
-                Some(ip) if ip.is_unique_local() => 1,
-                Some(_) => 2,
-                None => 3,
-            }
-        }
-
-        fn priority_rank(name: &str, priority: &[&str]) -> usize {
-            priority
-                .iter()
-                .position(|needle| {
-                    name == *needle
-                        || name.starts_with(needle)
-                        || name.contains(needle)
-                })
-                .unwrap_or(usize::MAX)
-        }
-
-        fn pdp_index(name: &str) -> Option<u32> {
-            name.strip_prefix("pdp_ip")?.parse::<u32>().ok()
-        }
-
-        // iOS-specific behavior:
-        // In practice, cellular `pdp_ip*` often has global IPv6 while Wi‑Fi `en0`
-        // may only have IPv4. The previous sorting preferred IPv6 first, which
-        // could cause `pdp_ip*` to win even when `en0` has a perfectly usable IPv4.
-        // For iOS, we prioritize interface name (Wi‑Fi first) and only then compare
-        // address quality.
-        if cfg!(target_os = "ios") {
-            let left_rank = priority_rank(&left.name, priority);
-            let right_rank = priority_rank(&right.name, priority);
-            if left_rank != right_rank {
-                return left_rank.cmp(&right_rank);
-            }
-
-            // Among pdp_ip* interfaces, pick a deterministic one (lowest suffix).
-            if left.name.starts_with("pdp_ip") && right.name.starts_with("pdp_ip") {
-                match (pdp_index(&left.name), pdp_index(&right.name)) {
-                    (Some(l), Some(r)) if l != r => return l.cmp(&r),
-                    (Some(_), None) => return std::cmp::Ordering::Less,
-                    (None, Some(_)) => return std::cmp::Ordering::Greater,
-                    _ => {}
-                }
-            }
-
-            // Prefer better IPv6 (global > ULA > others > none).
-            let left_v6 = v6_rank(left.addr_v6);
-            let right_v6 = v6_rank(right.addr_v6);
-            if left_v6 != right_v6 {
-                return left_v6.cmp(&right_v6);
-            }
-
-            // Prefer having IPv4 if all else ties.
-            match (left.addr_v4.is_some(), right.addr_v4.is_some()) {
-                (true, false) => return std::cmp::Ordering::Less,
-                (false, true) => return std::cmp::Ordering::Greater,
-                _ => {}
-            }
-
-            return left.name.cmp(&right.name);
-        }
-
-        // Default behavior for other OSes: prefer IPv6 first, then apply priority.
         match (left.addr_v6, right.addr_v6) {
             (Some(_), None) => return std::cmp::Ordering::Less,
             (None, Some(_)) => return std::cmp::Ordering::Greater,
@@ -242,9 +177,15 @@ pub fn get_outbound_interface() -> Option<OutboundInterface> {
             }
             _ => {}
         }
+        let left = priority
+            .iter()
+            .position(|x| left.name.contains(x))
+            .unwrap_or(usize::MAX);
+        let right = priority
+            .iter()
+            .position(|x| right.name.contains(x))
+            .unwrap_or(usize::MAX);
 
-        let left = priority_rank(&left.name, priority);
-        let right = priority_rank(&right.name, priority);
         left.cmp(&right)
     });
 

@@ -32,17 +32,26 @@ pub async fn make_clients(
 
         let port = if s.net == DNSNetMode::Dhcp { 0 } else { s.port };
 
+        // On iOS, skip interface binding for DNS clients.
+        // NEPacketTunnelProvider automatically excludes the VPN extension's
+        // own connections from TUN routing, so no interface binding is needed
+        // to avoid traffic loops.
+        #[cfg(target_os = "ios")]
+        let dns_iface = None;
+        #[cfg(not(target_os = "ios"))]
+        let dns_iface = s
+            .interface
+            .as_ref()
+            .or(DEFAULT_OUTBOUND_INTERFACE.read().await.as_ref())
+            .inspect(|x| debug!("DNS client interface: {:?}", x))
+            .cloned();
+
         match DnsClient::new_client(Opts {
             father: resolver.as_ref().cloned(),
             host: s.host.clone(),
             port,
             net: s.net.to_owned(),
-            iface: s
-                .interface
-                .as_ref()
-                .or(DEFAULT_OUTBOUND_INTERFACE.read().await.as_ref())
-                .inspect(|x| debug!("DNS client interface: {:?}", x))
-                .cloned(),
+            iface: dns_iface,
             proxy,
             ecs: edns_client_subnet.clone(),
             fw_mark,

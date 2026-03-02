@@ -2,12 +2,13 @@ use crate::{
     app::{
         dispatcher::Dispatcher,
         dns::{ThreadSafeDNSResolver, exchange_with_resolver},
-        net::DEFAULT_OUTBOUND_INTERFACE,
     },
     common::errors::new_io_error,
     proxy::datagram::UdpPacket,
     session::{Network, Session, Type},
 };
+#[cfg(not(target_os = "ios"))]
+use crate::app::net::DEFAULT_OUTBOUND_INTERFACE;
 use futures::{Sink, Stream, ready};
 use std::{sync::Arc, task::Poll};
 use tracing::{debug, trace, warn};
@@ -15,10 +16,12 @@ use tracing::{debug, trace, warn};
 // Capacity for UDP mpsc channels between TUN and dispatcher.
 // Can be tuned via env var `CLASH_UDP_CHAN_CAP` (e.g., 512 or 1024).
 fn udp_channel_capacity() -> usize {
-    std::env::var("CLASH_UDP_CHAN_CAP")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(512)
+    #[cfg(target_os = "ios")]
+    {
+        64
+    }
+    #[cfg(not(target_os = "ios"))]
+    512
 }
 
 pub(crate) async fn handle_inbound_datagram(
@@ -50,13 +53,21 @@ pub(crate) async fn handle_inbound_datagram(
     // is to the tun
     let udp_stream = TunDatagram::new(l_tx, d_rx);
 
-    let default_outbound = DEFAULT_OUTBOUND_INTERFACE.read().await;
+    // On iOS, skip interface binding — NEPacketTunnelProvider automatically
+    // routes the extension's connections through the physical interface.
+    #[cfg(target_os = "ios")]
+    let tun_iface = None;
+    #[cfg(not(target_os = "ios"))]
+    let tun_iface = {
+        let default_outbound = DEFAULT_OUTBOUND_INTERFACE.read().await;
+        default_outbound.clone().inspect(|x| {
+            debug!("selecting outbound interface: {:?} for tun UDP traffic", x);
+        })
+    };
     let sess = Session {
         network: Network::Udp,
         typ: Type::Tun,
-        iface: default_outbound.clone().inspect(|x| {
-            debug!("selecting outbound interface: {:?} for tun UDP traffic", x);
-        }),
+        iface: tun_iface,
         so_mark,
         ..Default::default()
     };
