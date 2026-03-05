@@ -369,12 +369,12 @@ pub fn get_runner(
                         let full_hex = full_packet_hex(pkt.as_ref());
                         if !is_likely_ip && suspicious_logged < 30 {
                             suspicious_logged += 1;
-                            warn!(
+                            /*warn!(
                                 "tun packet is not recognized as raw IP ({}): {} | full=[{}]",
                                 suspicious_logged, pkt_desc, full_hex
-                            );
+                            );*/
                         } else {
-                            trace!("tun packet: {}", pkt_desc);
+                            //trace!("tun packet: {}", pkt_desc);
                         }
 
                         if let Err(e) =

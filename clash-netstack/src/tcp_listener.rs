@@ -17,8 +17,15 @@ use std::{
 };
 use tokio::sync::mpsc;
 
-const DEFAULT_TCP_SEND_BUFFER_SIZE: u32 = 256 * 1024; // 512 KB
-const DEFAULT_TCP_RECV_BUFFER_SIZE: u32 = 256 * 1024; // 512 KB
+#[cfg(target_os = "ios")]
+const DEFAULT_TCP_SEND_BUFFER_SIZE: u32 = 32 * 1024;
+#[cfg(target_os = "ios")]
+const DEFAULT_TCP_RECV_BUFFER_SIZE: u32 = 32 * 1024;
+
+#[cfg(not(target_os = "ios"))]
+const DEFAULT_TCP_SEND_BUFFER_SIZE: u32 = 256 * 1024;
+#[cfg(not(target_os = "ios"))]
+const DEFAULT_TCP_RECV_BUFFER_SIZE: u32 = 256 * 1024;
 
 pub(crate) struct TcpStreamHandle {
     pub(crate) recv_buffer: LockFreeRingBuffer,
