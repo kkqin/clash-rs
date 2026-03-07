@@ -115,6 +115,7 @@ impl Config {
                 v => v,
             };
 
+            #[cfg(not(target_os = "ios"))]
             let iface = Self::parse_outbound_interface(&url);
             let proxy = Self::parse_outbound_proxy(&url);
             let net: &str;
