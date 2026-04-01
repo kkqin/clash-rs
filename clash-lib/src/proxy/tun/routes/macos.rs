@@ -327,7 +327,11 @@ pub(crate) fn maybe_delete_host_route_for_addr(ip: &std::net::IpAddr) -> std::io
 }
 
 /// failing to delete the default route won't cause route failure
-pub fn maybe_routes_clean_up(_: &TunConfig) -> std::io::Result<()> {
+pub fn maybe_routes_clean_up(cfg: &TunConfig) -> std::io::Result<()> {
+    if !cfg.route_all {
+        return Ok(());
+    }
+
     let (gateway_v4, gateway_v6) = get_default_gateway()?;
     let default_interface =
         get_outbound_interface().ok_or(new_io_error("get default interface"))?;

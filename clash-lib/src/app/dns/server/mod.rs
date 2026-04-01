@@ -1,10 +1,9 @@
 use hickory_proto::op::Message;
 
-use tracing::{error, instrument, info, warn};
-use std::time::Duration;
+use tracing::{error, info, instrument};
 use watfaq_dns::DNSListenAddr;
 
-use crate::Runner;
+use crate::runner::Runner;
 
 use super::ThreadSafeDNSResolver;
 
@@ -31,63 +30,75 @@ impl watfaq_dns::DnsMessageExchanger for DnsMessageExchanger {
     }
 }
 
-pub async fn get_dns_listener(
-    listen: DNSListenAddr,
+pub struct DnsRunner {
+    enable: bool,
+    listener: DNSListenAddr,
     resolver: ThreadSafeDNSResolver,
-    cwd: &std::path::Path,
-) -> Option<Runner> {
-    let resolver = resolver;
-    let cwd = cwd.to_path_buf();
+    cwd: std::path::PathBuf,
 
-    // Try to get an initial listener; if none configured, return None.
-    let initial = watfaq_dns::get_dns_listener(listen.clone(), DnsMessageExchanger { resolver: resolver.clone() }, &cwd).await;
-    match initial {
-        Some(runner) => Some(Box::pin(async move {
-            // When a listener exists, keep it running and automatically
-            // recreate it on transient errors (like UDP socket close triggered
-            // by route/interface changes). This loop will only bail out on
-            // non-transient errors.
-            let mut r = runner;
-            loop {
-                match r.await {
-                    Ok(()) => {
-                        info!("dns listener exited normally");
-                        return Ok(());
-                    }
-                    Err(err) => {
-                        error!("dns listener error: {}", err);
-                        let s = err.to_string();
+    cancellation_token: tokio_util::sync::CancellationToken,
+}
 
-                        // Detect transient error patterns (UDP socket closed etc.)
-                        if s.contains("unexpected close of UDP socket")
-                            || s.contains("dns proxy outbound is closed")
-                            || s.contains("connection reset")
-                            || s.contains("socket")
-                        {
-                            warn!("transient dns listener error, will restart: {}", s);
-                            tokio::time::sleep(Duration::from_millis(500)).await;
+impl DnsRunner {
+    pub fn new(
+        enable: bool,
+        listen: DNSListenAddr,
+        resolver: ThreadSafeDNSResolver,
+        cwd: &std::path::Path,
+        cancellation_token: Option<tokio_util::sync::CancellationToken>,
+    ) -> Self {
+        Self {
+            enable,
+            listener: listen,
+            resolver,
+            cwd: cwd.to_path_buf(),
+            cancellation_token: cancellation_token.unwrap_or_default(),
+        }
+    }
+}
 
-                            // Try to recreate the listener. If recreation returns
-                            // None, the configuration no longer requests a listener,
-                            // so exit cleanly.
-                            match watfaq_dns::get_dns_listener(listen.clone(), DnsMessageExchanger { resolver: resolver.clone() }, &cwd).await {
-                                Some(new_runner) => {
-                                    r = new_runner;
-                                    continue;
-                                }
-                                None => {
-                                    info!("dns listener recreation returned None, exiting");
-                                    return Ok(());
-                                }
+impl Runner for DnsRunner {
+    fn run_async(&self) {
+        if !self.enable {
+            info!("dns listener is disabled, skipping");
+            return;
+        }
+
+        let resolver = self.resolver.clone();
+        let listen = self.listener.clone();
+        let cwd = self.cwd.clone();
+        let cancellation_token = self.cancellation_token.clone();
+
+        tokio::spawn(async move {
+            let h = DnsMessageExchanger { resolver };
+            let r = watfaq_dns::get_dns_listener(listen, h, &cwd).await;
+            if let Some(r) = r {
+                tokio::select! {
+                    res = r => {
+                        match res {
+                            Ok(()) => {},
+                            Err(err) => {
+                                error!("dns listener error: {}", err);
                             }
                         }
+                    },
+                    _ = cancellation_token.cancelled() => {
+                        info!("dns listener is closed");
 
-                        // Non-transient error: bubble up
-                        return Err(err.into());
-                    }
+                    },
                 }
+            } else {
+                info!("dns listener: no listen addresses configured, skipping");
             }
-        })),
-        None => None,
+        });
+    }
+
+    fn shutdown(&self) {
+        info!("Shutting down DNS server");
+        self.cancellation_token.cancel();
+    }
+
+    fn join(&self) -> futures::future::BoxFuture<'_, Result<(), crate::Error>> {
+        Box::pin(async move { Ok(()) })
     }
 }

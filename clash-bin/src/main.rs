@@ -79,7 +79,7 @@ struct Cli {
     #[clap(
         long,
         value_parser,
-        action = clap::ArgAction::SetTrue,
+        default_value = "true",
         help = "Enable compatibility mode, which make behaviors more consistent \
                 with mihomo but may cause some issues. It is recommended to enable \
                 this if you are using clash verge."
@@ -179,6 +179,13 @@ fn main() -> anyhow::Result<()> {
     config.general.controller.external_controller_ipc = cli.controller_ipc;
 
     if cli.compatibility {
+        println!(
+            "Compatibility mode enabled. This may cause some issues, but it is \
+             recommended to enable this if you are using clash verge."
+        );
+        if let Some(dir) = &cli.directory {
+            std::env::set_current_dir(dir)?;
+        }
         config.general.mmdb = Some("Country.mmdb".to_string());
         config.general.geosite = Some("geosite.dat".to_string());
     }

@@ -3,7 +3,7 @@ use crate::{
         dispatcher::tracked::{TrackedDatagram, TrackedStream},
         dns::ClashResolver,
         outbound::manager::ThreadSafeOutboundManager,
-        router::ThreadSafeRouter,
+        router::ArcRouter,
     },
     common::io::copy_bidirectional,
     config::{
@@ -41,7 +41,7 @@ const MAX_CONCURRENT_CONNECTIONS: usize = 1000;
 
 pub struct Dispatcher {
     outbound_manager: ThreadSafeOutboundManager,
-    router: ThreadSafeRouter,
+    router: ArcRouter,
     resolver: ThreadSafeDNSResolver,
     mode: Arc<RwLock<RunMode>>,
     manager: Arc<Manager>,
@@ -58,7 +58,7 @@ impl Debug for Dispatcher {
 impl Dispatcher {
     pub fn new(
         outbound_manager: ThreadSafeOutboundManager,
-        router: ThreadSafeRouter,
+        router: ArcRouter,
         resolver: ThreadSafeDNSResolver,
         mode: RunMode,
         statistics_manager: Arc<Manager>,
@@ -123,10 +123,13 @@ impl Dispatcher {
         debug!("dispatching {} to {}[{}]", sess, outbound_name, mode);
 
         let mgr = self.outbound_manager.clone();
-        let handler = mgr.get_outbound(outbound_name).unwrap_or_else(|| {
-            debug!("unknown rule: {}, fallback to direct", outbound_name);
-            mgr.get_outbound(PROXY_DIRECT).unwrap()
-        });
+        let handler = match mgr.get_outbound(outbound_name).await {
+            Some(h) => h,
+            None => {
+                debug!("unknown rule: {}, fallback to direct", outbound_name);
+                mgr.get_outbound(PROXY_DIRECT).await.unwrap()
+            }
+        };
 
         match handler
             .connect_stream(&sess, self.resolver.clone())
@@ -303,6 +306,7 @@ impl Dispatcher {
                 let orig_dest = packet.dst_addr.clone();
                 sess.source = src_addr;
                 sess.destination = dest.clone();
+                sess.inbound_user = packet.inbound_user.clone();
 
                 // mutate packet for fake ip
                 // resolve is done in OutboundDatagramImpl so it's fine to have
@@ -325,14 +329,16 @@ impl Dispatcher {
                 let remote_receiver_w = remote_receiver_w.clone();
 
                 let mgr = outbound_manager.clone();
-                let handler =
-                    mgr.get_outbound(&outbound_name).unwrap_or_else(|| {
+                let handler = match mgr.get_outbound(&outbound_name).await {
+                    Some(h) => h,
+                    None => {
                         debug!(
                             "unknown rule: {}, fallback to direct",
                             outbound_name
                         );
-                        mgr.get_outbound(PROXY_DIRECT).unwrap()
-                    });
+                        mgr.get_outbound(PROXY_DIRECT).await.unwrap()
+                    }
+                };
 
                 let outbound_name =
                     if let Some(group) = handler.try_as_group_handler() {
