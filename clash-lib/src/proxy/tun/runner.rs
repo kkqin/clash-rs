@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use futures::{FutureExt, SinkExt, StreamExt, future::BoxFuture};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn, trace};
 use url::Url;
 
 use crate::{
@@ -248,6 +248,60 @@ impl TunRunner {
             };
 
         let (stack, tcp_listener, udp_socket) = watfaq_netstack::NetStack::new();
+
+        // On macOS, we temporarily pause writes to utun after a route/default gateway change
+        // to avoid overwhelming the kernel mbuf pool (mbuf_watchdog panic) during Wi‑Fi
+        // switches or wake-from-sleep transitions.
+        #[cfg(target_os = "macos")]
+        let mut netchange_rx = routes::subscribe_netchange();
+        #[cfg(target_os = "macos")]
+        let tun_paused = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        #[cfg(target_os = "macos")]
+        {
+            let tun_paused_clone = tun_paused.clone();
+            // Debounced pause controller: any netchange will (re)set a 3s pause window.
+            tokio::spawn(async move {
+                use tokio::time::{Duration, Instant};
+                // Use a single pinned Sleep we can reset, avoiding borrow/await issues.
+                let mut delay = Box::pin(tokio::time::sleep(Duration::from_secs(
+                    365 * 24 * 60 * 60,
+                )));
+                loop {
+                    tokio::select! {
+                        biased;
+                        // When the timer fires, resume writes and push the timer far in the future.
+                        _ = &mut delay => {
+                            // Pause window elapsed; resume writes
+                            tun_paused_clone.store(false, std::sync::atomic::Ordering::SeqCst);
+                            warn!("netchange pause window ended; resuming utun writes");
+                            // Re-arm timer to a far-future deadline (effectively disabled)
+                            delay.as_mut().reset(Instant::now() + Duration::from_secs(365 * 24 * 60 * 60));
+                        }
+                        res = netchange_rx.recv() => {
+                            match res {
+                                Ok(_) => {
+                                    // Start or extend the pause window to 3s
+                                    let already_paused = tun_paused_clone.load(std::sync::atomic::Ordering::SeqCst);
+                                    tun_paused_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+                                    if already_paused {
+                                        trace!("netchange detected; extending utun write pause window (3s)");
+                                    } else {
+                                        warn!("netchange detected; pausing utun writes for 3s to protect mbufs");
+                                    }
+                                    // Reset timer to fire in 3 seconds (debounce)
+                                    delay.as_mut().reset(Instant::now() + Duration::from_secs(3));
+                                }
+                                Err(_) => {
+                                    // broadcaster dropped; nothing more to do
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
         Ok((tun, stack, tcp_listener, udp_socket))
     }
 }
@@ -398,6 +452,11 @@ impl Runner for TunRunner {
             Err(e) => {
                 error!("failed to clean up routes: {}", e);
             }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            // Also remove any host routes we added for DNS servers, etc.
+            routes::cleanup_host_routes();
         }
         self.cancellation_token.cancel();
     }

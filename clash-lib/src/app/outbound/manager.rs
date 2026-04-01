@@ -41,7 +41,7 @@ use crate::{
         selector::{self, ThreadSafeSelectorControl},
         socks, trojan, urltest,
         utils::{DirectConnector, OutboundHandlerRegistry, ProxyConnector},
-        vless, vmess,
+        vless, vmess, zdt
     },
 };
 use anyhow::Result;

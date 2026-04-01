@@ -29,18 +29,20 @@ pub use other::maybe_routes_clean_up;
 use std::{collections::HashSet, io, net::IpAddr, time::Duration};
 use tracing::{error, warn};
 
-use crate::{Runner, config::internal::config::TunConfig};
-
-use crate::app::net::get_interface_by_name;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+use crate::{
+    app::net::get_interface_by_name, config::internal::config::TunConfig,
 };
 
+#[cfg(target_os = "macos")]
+use crate::runner::Runner;
+#[cfg(target_os = "macos")]
+use futures::future::BoxFuture;
 #[cfg(target_os = "macos")]
 use std::sync::LazyLock;
 #[cfg(target_os = "macos")]
 use tokio::sync::broadcast;
+#[cfg(target_os = "macos")]
+use tokio_util::sync::CancellationToken;
 
 #[cfg(target_os = "macos")]
 static NETCHANGE_TX: LazyLock<broadcast::Sender<()>> = LazyLock::new(|| {
@@ -209,13 +211,29 @@ pub fn maybe_add_routes(cfg: &TunConfig, tun_name: &str) -> std::io::Result<()> 
 }
 
 #[cfg(target_os = "macos")]
-pub fn spawn_route_monitor(stop_flag: Arc<AtomicBool>) -> Option<Runner> {
-    Some(Box::pin(async move {
+pub struct RouteMonitorRunner {
+    enable: bool,
+    cancellation_token: CancellationToken,
+}
+
+#[cfg(target_os = "macos")]
+impl RouteMonitorRunner {
+    pub fn new(
+        enable: bool,
+        cancellation_token: Option<CancellationToken>,
+    ) -> Self {
+        Self {
+            enable,
+            cancellation_token: cancellation_token.unwrap_or_default(),
+        }
+    }
+
+    async fn monitor(cancellation_token: CancellationToken) {
         let mut backoff_secs = 1u64;
         let mut last_fix: Option<std::time::Instant> = None;
 
         'restart: loop {
-            if stop_flag.load(Ordering::SeqCst) {
+            if cancellation_token.is_cancelled() {
                 break 'restart;
             }
 
@@ -253,7 +271,7 @@ pub fn spawn_route_monitor(stop_flag: Arc<AtomicBool>) -> Option<Runner> {
 
             // inner read loop
             loop {
-                if stop_flag.load(Ordering::SeqCst) {
+                if cancellation_token.is_cancelled() {
                     warn!("route monitor stopping as requested");
                     unsafe { libc::close(rtsock) };
                     break 'restart;
@@ -310,7 +328,10 @@ pub fn spawn_route_monitor(stop_flag: Arc<AtomicBool>) -> Option<Runner> {
                         if macos::has_default_route(rtm) {
                             // debounce to avoid thrashing
                             let now = std::time::Instant::now();
-                            if last_fix.map(|t| now.duration_since(t) < Duration::from_secs(3)).unwrap_or(false) {
+                            if last_fix
+                                .map(|t| now.duration_since(t) < Duration::from_secs(3))
+                                .unwrap_or(false)
+                            {
                                 continue;
                             }
 
@@ -336,7 +357,28 @@ pub fn spawn_route_monitor(stop_flag: Arc<AtomicBool>) -> Option<Runner> {
                 }
             }
         }
+    }
+}
 
-        Ok(())
-    }))
+#[cfg(target_os = "macos")]
+impl Runner for RouteMonitorRunner {
+    fn run_async(&self) {
+        if !self.enable {
+            return;
+        }
+
+        let cancellation_token = self.cancellation_token.clone();
+        tokio::spawn(async move {
+            RouteMonitorRunner::monitor(cancellation_token).await;
+        });
+    }
+
+    fn shutdown(&self) {
+        warn!("shutting down route monitor");
+        self.cancellation_token.cancel();
+    }
+
+    fn join(&self) -> BoxFuture<'_, Result<(), crate::Error>> {
+        Box::pin(async { Ok(()) })
+    }
 }

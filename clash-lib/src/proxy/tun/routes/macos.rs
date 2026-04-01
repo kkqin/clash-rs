@@ -416,9 +416,12 @@ pub fn maybe_routes_clean_up(cfg: &TunConfig) -> std::io::Result<()> {
 
 #[derive(Debug)]
 struct RouteEntry {
+    #[allow(dead_code)]
     dst: String,
     gateway: String,
+    #[allow(dead_code)]
     ifname: String,
+    #[allow(dead_code)]
     is_default: bool,
 }
 
@@ -449,7 +452,7 @@ unsafe fn parse_route_message(rtm: &libc::rt_msghdr) -> Option<RouteEntry> {
                     let addr = Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr));
                     dst = Some(addr.to_string());
                     if addr == Ipv4Addr::UNSPECIFIED {
-                        is_default = true;
+                        is_default = true
                     }
                 } else if unsafe { (*sa).sa_family as i32 == libc::AF_INET6 } {
                     let sin6 = unsafe { &*(sa as *const libc::sockaddr_in6) };

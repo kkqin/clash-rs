@@ -35,9 +35,6 @@ use crate::{
     runner::Runner,
 };
 
-#[cfg(feature = "tun")]
-use proxy::tun::get_tun_runner;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use std::{
     io,
@@ -267,17 +264,11 @@ pub async fn start(
     let components = create_components(cwd.clone(), config).await?;
 
     let inbound_manager = components.inbound_manager.clone();
-    inbound_manager.start_all_listeners().await;
+    inbound_manager.get_listeners().await;
 
-    #[cfg(feature = "tun")]
-    let tun_runner_handle = components.tun_runner.map(tokio::spawn);
-    let dns_listener_handle = components.dns_listener.map(tokio::spawn);
-    let route_stop = Arc::new(AtomicBool::new(false));
-    #[cfg(all(feature = "tun", target_os = "macos"))]
-    {
-        use crate::proxy::tun::routes::spawn_route_monitor;
-        spawn_route_monitor(route_stop.clone()).map(tokio::spawn);
-    };
+    //#[cfg(feature = "tun")]
+    //let tun_runner_handle = components.tun_runner.map(tokio::spawn);
+    //let dns_listener_handle = components.dns_listener.map(tokio::spawn);
 
     let (reload_tx, mut reload_rx) = mpsc::channel(1);
 
@@ -320,20 +311,6 @@ pub async fn start(
         g.dns_listener = components.dns_listener.clone();
     }
 
-    let route_stop1 = route_stop.clone();
-    runners.push(Box::pin(async move {
-        match shutdown_rx.recv().await {
-            Some(_) => {
-                info!("received shutdown signal");
-                route_stop1.store(true, Ordering::SeqCst);
-                Ok(())
-            }
-            None => {
-                info!("runtime controller shutdown");
-                Ok(())
-            }
-        }
-    }));
     components.start_all();
 
     let cwd_clone = cwd.clone();
@@ -385,53 +362,6 @@ pub async fn start(
             let mut g = global_state.lock().await;
 
             #[cfg(feature = "tun")]
-            if let Some(h) = g.tunnel_listener_handle.take() {
-                h.abort();
-            }
-            if let Some(h) = g.dns_listener_handle.take() {
-                h.abort();
-            }
-            if let Some(h) = g.api_listener_handle.take() {
-                h.abort();
-            }
-
-            let inbound_manager = new_components.inbound_manager.clone();
-            debug!("reloading inbound listener");
-            inbound_manager.restart().await;
-
-            #[cfg(feature = "tun")]
-            debug!("reloading tun runner");
-            #[cfg(feature = "tun")]
-            let tun_runner_handle = new_components.tun_runner.map(tokio::spawn);
-
-            debug!("reloading dns listener");
-            let dns_listener_handle = new_components.dns_listener.map(tokio::spawn);
-
-            debug!("reloading api listener");
-            let api_listener_handle = app::api::get_api_runner(
-                controller_cfg,
-                log_tx.clone(),
-                new_components.inbound_manager,
-                new_components.dispatcher,
-                global_state.clone(),
-                new_components.dns_resolver,
-                new_components.outbound_manager,
-                new_components.statistics_manager,
-                new_components.cache_store,
-                new_components.router,
-                cwd.to_string_lossy().to_string(),
-            )
-            .map(tokio::spawn);
-
-            #[cfg(all(feature = "tun", target_os = "macos"))]
-            {
-                use crate::proxy::tun::routes::spawn_route_monitor;
-                spawn_route_monitor(route_stop.clone()).map(tokio::spawn);
-            };
-
-            debug!("reloading route monitor");
-
-            #[cfg(feature = "tun")]
             {
                 g.tunnel_runner = new_components.tun_runner.clone();
             }
@@ -451,6 +381,7 @@ pub async fn start(
 }
 
 pub async fn start_with_tun_fd(
+    #[allow(unused_mut)]
     mut config: InternalConfig,
     cwd: String,
     log_tx: broadcast::Sender<LogEvent>,
@@ -481,6 +412,8 @@ struct RuntimeComponents {
 
     #[cfg(feature = "tun")]
     tun_runner: ArcRunner,
+    #[cfg(all(feature = "tun", target_os = "macos"))]
+    route_monitor: ArcRunner,
     dns_listener: ArcRunner,
     inbound_manager: Arc<InboundManager>,
     dns_listen: DNSListenAddr,
@@ -491,11 +424,15 @@ impl RuntimeComponents {
     fn start_all(&self) {
         #[cfg(feature = "tun")]
         self.tun_runner.run_async();
+        #[cfg(all(feature = "tun", target_os = "macos"))]
+        self.route_monitor.run_async();
         self.dns_listener.run_async();
         self.inbound_manager.run_async();
     }
 
     fn stop_all(&self) {
+        #[cfg(all(feature = "tun", target_os = "macos"))]
+        self.route_monitor.shutdown();
         #[cfg(feature = "tun")]
         self.tun_runner.shutdown();
         self.dns_listener.shutdown();
@@ -511,6 +448,9 @@ async fn create_components(
         debug!("tun enabled, initializing default outbound interface");
         init_net_config(config.tun.so_mark).await;
     }
+
+    #[cfg(all(feature = "tun", target_os = "macos"))]
+    let tun_enable = config.tun.enable;
 
     let cancellation_token = tokio_util::sync::CancellationToken::new();
 
@@ -743,6 +683,12 @@ async fn create_components(
         Some(cancellation_token.child_token()),
     )?);
 
+    #[cfg(all(feature = "tun", target_os = "macos"))]
+    let route_monitor: ArcRunner = Arc::new(tun::routes::RouteMonitorRunner::new(
+        tun_enable,
+        Some(cancellation_token.child_token()),
+    ));
+
     debug!("initializing dns listener");
     let dns_listener: ArcRunner = Arc::new(dns::DnsRunner::new(
         dns_enable,
@@ -763,6 +709,8 @@ async fn create_components(
         inbound_manager,
         #[cfg(feature = "tun")]
         tun_runner,
+        #[cfg(all(feature = "tun", target_os = "macos"))]
+        route_monitor,
         dns_listener,
         dns_listen,
         dns_enabled: dns_enable,

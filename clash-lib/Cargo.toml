@@ -202,6 +202,7 @@ aws-lc-rs = { version = "1", default-features = false, optional = true }
 
 # tproxy
 etherparse = {version = "0.19", optional = true }
+cbc = "0.1.2"
 
 [dev-dependencies]
 tempfile = "3.27"
