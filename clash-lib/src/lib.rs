@@ -121,6 +121,8 @@ pub struct GlobalState {
     log_level: LogLevel,
     #[cfg(feature = "tun")]
     tunnel_runner: ArcRunner,
+    #[cfg(all(feature = "tun", target_os = "macos"))]
+    route_monitor: ArcRunner,
     dns_listener: ArcRunner,
     reload_tx: mpsc::Sender<(Config, oneshot::Sender<()>)>,
     cwd: String,
@@ -276,6 +278,8 @@ pub async fn start(
         log_level,
         #[cfg(feature = "tun")]
         tunnel_runner: components.tun_runner.clone(),
+        #[cfg(all(feature = "tun", target_os = "macos"))]
+        route_monitor: components.route_monitor.clone(),
         dns_listener: components.dns_listener.clone(),
         reload_tx,
         cwd: cwd.to_string_lossy().to_string(),
@@ -308,6 +312,10 @@ pub async fn start(
         {
             g.tunnel_runner = components.tun_runner.clone();
         }
+        #[cfg(all(feature = "tun", target_os = "macos"))]
+        {
+            g.route_monitor = components.route_monitor.clone();
+        }
         g.dns_listener = components.dns_listener.clone();
     }
 
@@ -316,6 +324,8 @@ pub async fn start(
     let cwd_clone = cwd.clone();
 
     let reload_token = shutdown_token.child_token();
+    let global_state_for_reload = global_state.clone();
+    let api_listener_for_reload = api_listener.clone();
     tokio::spawn(async move {
         // Listen for config reload signal and reload config
         while let Some((config, done)) = reload_rx.recv().await {
@@ -348,7 +358,7 @@ pub async fn start(
                 log_tx.clone(),
                 new_components.inbound_manager.clone(),
                 new_components.dispatcher.clone(),
-                global_state.clone(),
+                global_state_for_reload.clone(),
                 new_components.dns_resolver.clone(),
                 new_components.outbound_manager.clone(),
                 new_components.statistics_manager.clone(),
@@ -359,15 +369,19 @@ pub async fn start(
                 new_components.dns_listen.clone(),
                 new_components.dns_enabled,
             ));
-            let mut g = global_state.lock().await;
+            let mut g = global_state_for_reload.lock().await;
 
             #[cfg(feature = "tun")]
             {
                 g.tunnel_runner = new_components.tun_runner.clone();
             }
+            #[cfg(all(feature = "tun", target_os = "macos"))]
+            {
+                g.route_monitor = new_components.route_monitor.clone();
+            }
             g.dns_listener = new_components.dns_listener.clone();
 
-            api_listener.shutdown();
+            api_listener_for_reload.shutdown();
             new_api_listener.run_async();
         }
         Ok::<(), Error>(())
@@ -377,6 +391,20 @@ pub async fn start(
         result = tokio::signal::ctrl_c() => { result.map_err(Error::Io)?; }
         _ = shutdown_token.cancelled() => {}
     }
+
+    // Trigger graceful shutdown so runners execute their cleanup logic
+    // (e.g., TUN route cleanup on macOS).
+    shutdown_token.cancel();
+    {
+        let g = global_state.lock().await;
+        #[cfg(feature = "tun")]
+        g.tunnel_runner.shutdown();
+        #[cfg(all(feature = "tun", target_os = "macos"))]
+        g.route_monitor.shutdown();
+        g.dns_listener.shutdown();
+    }
+    api_listener.shutdown();
+
     Ok(())
 }
 

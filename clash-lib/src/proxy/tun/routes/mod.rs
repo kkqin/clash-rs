@@ -26,7 +26,9 @@ use other::add_route;
 #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 pub use other::maybe_routes_clean_up;
 
+#[allow(unused_imports)]
 use std::{collections::HashSet, io, net::IpAddr, time::Duration};
+#[allow(unused_imports)]
 use tracing::{error, warn};
 
 use crate::{
@@ -39,6 +41,11 @@ use crate::runner::Runner;
 use futures::future::BoxFuture;
 #[cfg(target_os = "macos")]
 use std::sync::LazyLock;
+#[cfg(target_os = "macos")]
+use std::sync::{
+    Arc,
+    atomic::{AtomicI32, Ordering},
+};
 #[cfg(target_os = "macos")]
 use tokio::sync::broadcast;
 #[cfg(target_os = "macos")]
@@ -214,6 +221,7 @@ pub fn maybe_add_routes(cfg: &TunConfig, tun_name: &str) -> std::io::Result<()> 
 pub struct RouteMonitorRunner {
     enable: bool,
     cancellation_token: CancellationToken,
+    route_sock_fd: Arc<AtomicI32>,
 }
 
 #[cfg(target_os = "macos")]
@@ -225,10 +233,14 @@ impl RouteMonitorRunner {
         Self {
             enable,
             cancellation_token: cancellation_token.unwrap_or_default(),
+            route_sock_fd: Arc::new(AtomicI32::new(-1)),
         }
     }
 
-    async fn monitor(cancellation_token: CancellationToken) {
+    async fn monitor(
+        cancellation_token: CancellationToken,
+        route_sock_fd: Arc<AtomicI32>,
+    ) {
         let mut backoff_secs = 1u64;
         let mut last_fix: Option<std::time::Instant> = None;
 
@@ -248,6 +260,8 @@ impl RouteMonitorRunner {
                 backoff_secs = (backoff_secs * 2).min(60);
                 continue 'restart;
             }
+
+            route_sock_fd.store(rtsock, Ordering::Release);
 
             // shorter timeout for faster stop/retry
             let tv = libc::timeval {
@@ -274,6 +288,7 @@ impl RouteMonitorRunner {
                 if cancellation_token.is_cancelled() {
                     warn!("route monitor stopping as requested");
                     unsafe { libc::close(rtsock) };
+                    route_sock_fd.store(-1, Ordering::Release);
                     break 'restart;
                 }
 
@@ -302,6 +317,7 @@ impl RouteMonitorRunner {
                             error!("route monitor fatal error: {:?}", err);
                             // close and restart
                             unsafe { libc::close(rtsock) };
+                            route_sock_fd.store(-1, Ordering::Release);
                             std::thread::sleep(Duration::from_secs(backoff_secs));
                             backoff_secs = (backoff_secs * 2).min(60);
                             continue 'restart;
@@ -368,13 +384,19 @@ impl Runner for RouteMonitorRunner {
         }
 
         let cancellation_token = self.cancellation_token.clone();
+        let route_sock_fd = self.route_sock_fd.clone();
         tokio::spawn(async move {
-            RouteMonitorRunner::monitor(cancellation_token).await;
+            RouteMonitorRunner::monitor(cancellation_token, route_sock_fd).await;
         });
     }
 
     fn shutdown(&self) {
         warn!("shutting down route monitor");
+        let fd = self.route_sock_fd.swap(-1, Ordering::AcqRel);
+        if fd >= 0 {
+            // Unblock a potentially blocking read(PF_ROUTE).
+            unsafe { libc::close(fd) };
+        }
         self.cancellation_token.cancel();
     }
 

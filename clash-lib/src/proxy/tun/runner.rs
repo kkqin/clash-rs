@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use futures::{FutureExt, SinkExt, StreamExt, future::BoxFuture};
 use tokio_util::sync::CancellationToken;
+#[allow(unused_imports)]
 use tracing::{debug, error, info, warn, trace};
 use url::Url;
 
