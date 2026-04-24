@@ -148,6 +148,10 @@ impl OutboundHandler for Handler {
         &self.opts.name
     }
 
+    fn server_name(&self) -> Option<&str> {
+        Some(&self.opts.server)
+    }
+
     fn proto(&self) -> OutboundType {
         OutboundType::Ssh
     }
@@ -239,8 +243,6 @@ impl OutboundHandler for Handler {
 impl PlainProxyAPIResponse for Handler {
     async fn as_map(&self) -> HashMap<String, Box<dyn ErasedSerialize + Send>> {
         let mut m = HashMap::new();
-        m.insert("name".to_owned(), Box::new(self.opts.name.clone()) as _);
-        m.insert("type".to_owned(), Box::new(self.proto().to_string()) as _);
         m.insert("server".to_owned(), Box::new(self.opts.server.clone()) as _);
         m.insert("port".to_owned(), Box::new(self.opts.port) as _);
         m.insert(
@@ -276,7 +278,7 @@ async fn auth0(
 mod tests {
     use std::{future::Future, path::PathBuf};
 
-    use aead::rand_core::SeedableRng;
+    use rand_chacha::rand_core::SeedableRng;
     use russh::keys::HashAlg;
     use tempfile::tempdir;
 
@@ -317,7 +319,6 @@ mod tests {
     /// `/config/sshd/sshd_config` in the container.
     /// before starting the container, we need to generate host key pairs in
     /// /tmp/.xxx/ssh/ssh_host_keys.
-    #[allow(unused)]
     async fn get_openssh_server_runner(
         ssh_config_path: PathBuf,
     ) -> anyhow::Result<DockerTestRunner> {
@@ -338,7 +339,6 @@ mod tests {
             .await
     }
 
-    #[allow(unused)]
     fn gen_ssh_key_pair(
         algo: russh::keys::Algorithm,
     ) -> anyhow::Result<(String, String)> {
@@ -362,7 +362,6 @@ mod tests {
         host_key: Option<Vec<String>>, // host key
     }
 
-    #[allow(unused)]
     async fn test_ssh_inner(opt: TestOption) -> anyhow::Result<()> {
         tracing::info!("testing ssh, using option: {:?}", opt);
 
@@ -486,7 +485,6 @@ mod tests {
     }
 
     /// Recursively copy a directory using async Rust APIs
-    #[allow(unused)]
     fn copy_dir_recursive<'a>(
         src: &'a std::path::Path,
         dst: &'a std::path::Path,
@@ -511,7 +509,6 @@ mod tests {
     }
 
     /// Print directory structure for debugging
-    #[allow(unused)]
     fn print_dir_structure<'a>(
         path: &'a std::path::Path,
         indent: usize,

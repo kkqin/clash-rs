@@ -154,14 +154,10 @@ impl Handler {
                         keepalive_seconds: Some(10),
                         allowed_ips,
                         reserved_bits: match &self.opts.reserved_bits {
-                            Some(bits) => {
-                                if bits.len() >= 3 {
-                                    [bits[0], bits[1], bits[2]]
-                                } else {
-                                    [0, 0, 0]
-                                }
+                            Some(bits) if bits.len() >= 3 => {
+                                [bits[0], bits[1], bits[2]]
                             }
-                            None => [0, 0, 0],
+                            _ => [0, 0, 0],
                         },
                     },
                     recv_pair.0,
@@ -229,6 +225,10 @@ impl Handler {
 impl OutboundHandler for Handler {
     fn name(&self) -> &str {
         &self.opts.name
+    }
+
+    fn server_name(&self) -> Option<&str> {
+        Some(&self.opts.server)
     }
 
     fn proto(&self) -> OutboundType {
@@ -316,17 +316,12 @@ impl OutboundHandler for Handler {
 impl PlainProxyAPIResponse for Handler {
     async fn as_map(&self) -> HashMap<String, Box<dyn ErasedSerialize + Send>> {
         let mut m = HashMap::new();
-        m.insert("name".to_owned(), Box::new(self.opts.name.clone()) as _);
-        m.insert("type".to_owned(), Box::new(self.proto().to_string()) as _);
         m.insert("server".to_owned(), Box::new(self.opts.server.clone()) as _);
         m.insert("port".to_owned(), Box::new(self.opts.port) as _);
         m.insert(
             "public-key".to_owned(),
             Box::new(self.opts.public_key.clone()) as _,
         );
-        if self.opts.udp {
-            m.insert("udp".to_owned(), Box::new(true) as _);
-        }
         m
     }
 }

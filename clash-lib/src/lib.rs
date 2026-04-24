@@ -285,7 +285,7 @@ pub async fn start(
         cwd: cwd.to_string_lossy().to_string(),
     }));
 
-    let api_listener: ArcRunner = Arc::new(app::api::ApiRunner::new(
+    let mut api_listener: ArcRunner = Arc::new(app::api::ApiRunner::new(
         controller_cfg.clone(),
         log_tx.clone(),
         components.inbound_manager.clone(),
@@ -382,7 +382,12 @@ pub async fn start(
             g.dns_listener = new_components.dns_listener.clone();
 
             api_listener_for_reload.shutdown();
+            api_listener.shutdown();
+            // Wait for the old API server to fully stop before starting the new
+            // one, to avoid EADDRINUSE on the same port.
+            api_listener.join().await.ok();
             new_api_listener.run_async();
+            api_listener = new_api_listener;
         }
         Ok::<(), Error>(())
     });
@@ -494,6 +499,7 @@ async fn create_components(
     );
 
     debug!("initializing bootstrap outbounds");
+
     let plain_outbounds = OutboundManager::load_plain_outbounds(
         config
             .proxies
@@ -509,13 +515,12 @@ async fn create_components(
     // After OutboundManager is initialized it will be extended with all
     // handlers (plain + proxy groups + provider proxies), so DNS clients
     // and the HTTP client can use any of them for bootstrap traffic.
-    let outbound_registry: crate::proxy::utils::OutboundHandlerRegistry =
-        Arc::new(tokio::sync::RwLock::new(
-            plain_outbounds
-                .iter()
-                .map(|x| (x.name().to_string(), x.clone()))
-                .collect(),
-        ));
+    let outbound_registry = Arc::new(tokio::sync::RwLock::new(
+        plain_outbounds
+            .iter()
+            .map(|x| (x.name().to_string(), x.clone()))
+            .collect(),
+    ));
 
     let client =
         new_http_client(system_resolver.clone(), Some(outbound_registry.clone()))

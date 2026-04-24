@@ -134,13 +134,19 @@ async fn get_proxy_delay(
 ) -> impl IntoResponse {
     let outbound_manager = state.outbound_manager.clone();
     let timeout = Duration::from_millis(q.timeout.into());
-    let n = proxy.name().to_owned();
+    let name = proxy.name().to_owned();
     let mut headers = HeaderMap::new();
     headers.insert(header::CONNECTION, "close".parse().unwrap());
 
     let (actual, overall) = if let Some(group) = proxy.try_as_group_handler() {
         let latency_test_url = group.get_latency_test_url();
+
         let proxies = group.get_proxies().await;
+        let active_proxy = group.get_active_proxy().await;
+        let active_idx = active_proxy.as_ref().and_then(|active| {
+            proxies.iter().position(|p| p.name() == active.name())
+        });
+
         let results = outbound_manager
             .url_test(
                 &[vec![proxy], proxies].concat(),
@@ -148,13 +154,26 @@ async fn get_proxy_delay(
                 timeout,
             )
             .await;
-        match results.first().unwrap() {
+
+        // if found active proxy, return the latency of the active proxy, otherwise
+        // return the latency of the first proxy (which is the latency of the group).
+        let result = if let Some(idx) = active_idx {
+            results
+                .get(idx + 1)
+                .expect("active proxy index must be within the range of proxies")
+        } else {
+            results
+                .first()
+                .expect("there must be at least one proxy in the group")
+        };
+
+        match result {
             Ok(latency) => *latency,
             Err(err) => {
                 return (
                     StatusCode::BAD_REQUEST,
                     headers,
-                    format!("get delay for {n} failed with error: {err}"),
+                    format!("get delay for {name} failed with error: {err}"),
                 )
                     .into_response();
             }
@@ -163,13 +182,13 @@ async fn get_proxy_delay(
         let result = outbound_manager
             .url_test(&vec![proxy], &q.url, timeout)
             .await;
-        match result.first().unwrap() {
+        match result.first().expect("there must be at least one proxy") {
             Ok(latency) => *latency,
             Err(err) => {
                 return (
                     StatusCode::BAD_REQUEST,
                     headers,
-                    format!("get delay for {n} failed with error: {err}"),
+                    format!("get delay for {name} failed with error: {err}"),
                 )
                     .into_response();
             }
