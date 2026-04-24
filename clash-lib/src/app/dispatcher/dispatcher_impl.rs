@@ -36,8 +36,6 @@ const DEFAULT_BUFFER_SIZE: usize = 16 * 1024;
 // Limit concurrent connections on iOS to prevent memory exhaustion
 #[cfg(target_os = "ios")]
 const MAX_CONCURRENT_CONNECTIONS: usize = 1000;
-#[cfg(not(target_os = "ios"))]
-const MAX_CONCURRENT_CONNECTIONS: usize = 1000;
 
 pub struct Dispatcher {
     outbound_manager: ThreadSafeOutboundManager,
@@ -46,6 +44,7 @@ pub struct Dispatcher {
     mode: Arc<RwLock<RunMode>>,
     manager: Arc<Manager>,
     tcp_buffer_size: usize,
+    #[cfg(target_os = "ios")]
     connection_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
@@ -71,6 +70,7 @@ impl Dispatcher {
             mode: Arc::new(RwLock::new(mode)),
             manager: statistics_manager,
             tcp_buffer_size: tcp_buffer_size.unwrap_or(DEFAULT_BUFFER_SIZE),
+            #[cfg(target_os = "ios")]
             connection_semaphore: Arc::new(tokio::sync::Semaphore::new(
                 MAX_CONCURRENT_CONNECTIONS,
             )),
@@ -103,6 +103,7 @@ impl Dispatcher {
             };
 
         // Acquire connection permit (semaphore) to limit concurrent connections
+        #[cfg(target_os = "ios")]
         let _permit = match self.connection_semaphore.acquire().await {
             Ok(permit) => permit,
             Err(_) => {
@@ -250,6 +251,7 @@ impl Dispatcher {
         let resolver = self.resolver.clone();
         let mode = self.mode.clone();
         let manager = self.manager.clone();
+        #[cfg(target_os = "ios")]
         let connection_semaphore = self.connection_semaphore.clone();
 
         // Capacity for UDP forwarding channels.
@@ -488,6 +490,7 @@ impl Dispatcher {
 
         tokio::spawn(async move {
             // Acquire permit when session starts, release when closes
+            #[cfg(target_os = "ios")]
             let _permit = match connection_semaphore.acquire().await {
                 Ok(p) => {
                     debug!("acquired UDP connection permit");
