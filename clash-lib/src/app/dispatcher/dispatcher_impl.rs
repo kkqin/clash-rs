@@ -33,7 +33,11 @@ use super::statistics_manager::Manager;
 #[cfg(target_os = "ios")]
 const DEFAULT_BUFFER_SIZE: usize = 4 * 1024;
 #[cfg(not(target_os = "ios"))]
-const DEFAULT_BUFFER_SIZE: usize = 16 * 1024;
+// SS2022 (AEAD-2022) MAX_PACKET_SIZE is 0xFFFF (65535 bytes). Using a relay
+// buffer smaller than that forces the cipher to split every full packet into
+// multiple smaller encrypted chunks, multiplying encrypt/decrypt overhead.
+// Classic AEAD ciphers cap at 0x3FFF (16383 bytes) so they are unaffected.
+const DEFAULT_BUFFER_SIZE: usize = 64 * 1024;
 
 // Limit concurrent connections on iOS to prevent memory exhaustion
 #[cfg(target_os = "ios")]
