@@ -1313,7 +1313,7 @@ dependencies = [
  "boring-noise",
  "byteorder",
  "bytes",
- "cbc",
+ "cbc 0.1.2",
  "cfb-mode",
  "chacha20poly1305",
  "chrono",
