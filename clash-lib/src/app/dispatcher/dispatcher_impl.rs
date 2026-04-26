@@ -320,6 +320,7 @@ impl Dispatcher {
                     }
                 };
 
+                let src_addr = packet.src_addr.clone().must_into_socket_addr();
                 // for TUN or Tproxy, we need the original destination address
                 let orig_dest = packet.dst_addr.clone();
                 sess.source = src_addr;
