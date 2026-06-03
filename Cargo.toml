@@ -22,7 +22,10 @@ homepage = "https://github.com/watfaq/clash-rs"
 opt-level = "s"
 codegen-units = 1
 lto = "thin"
-strip = true
+# human-panic captures a backtrace at runtime. Stripping release binaries
+# makes local macOS reports collapse to __mh_execute_header instead of real
+# Rust frames, so keep symbols/debug info in the shipped binary.
+strip = false
 debug = 2
 panic = "abort"
 

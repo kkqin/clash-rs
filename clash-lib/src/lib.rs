@@ -285,7 +285,7 @@ pub async fn start(
         cwd: cwd.to_string_lossy().to_string(),
     }));
 
-    let mut api_listener: ArcRunner = Arc::new(app::api::ApiRunner::new(
+    let api_listener: ArcRunner = Arc::new(app::api::ApiRunner::new(
         controller_cfg.clone(),
         log_tx.clone(),
         components.inbound_manager.clone(),
@@ -325,7 +325,7 @@ pub async fn start(
 
     let reload_token = shutdown_token.child_token();
     let global_state_for_reload = global_state.clone();
-    let api_listener_for_reload = api_listener.clone();
+    let mut api_listener_for_reload = api_listener.clone();
     tokio::spawn(async move {
         // Listen for config reload signal and reload config
         while let Some((config, done)) = reload_rx.recv().await {
@@ -382,12 +382,11 @@ pub async fn start(
             g.dns_listener = new_components.dns_listener.clone();
 
             api_listener_for_reload.shutdown();
-            api_listener.shutdown();
             // Wait for the old API server to fully stop before starting the new
             // one, to avoid EADDRINUSE on the same port.
-            api_listener.join().await.ok();
+            api_listener_for_reload.join().await.ok();
             new_api_listener.run_async();
-            api_listener = new_api_listener;
+            api_listener_for_reload = new_api_listener;
         }
         Ok::<(), Error>(())
     });
