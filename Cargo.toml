@@ -12,29 +12,40 @@ members = [
 
 
 [workspace.package]
-version = "0.10.0"
+version = "0.10.6"
 repository = "https://github.com/Watfaq/clash-rs.git"
 edition = "2024"
 authors = ["https://github.com/Watfaq/clash-rs/graphs/contributors"]
 homepage = "https://github.com/watfaq/clash-rs"
 
 [profile.release]
-opt-level = "s"
+opt-level = "z"
 codegen-units = 1
-lto = "thin"
-# human-panic captures a backtrace at runtime. Stripping release binaries
-# makes local macOS reports collapse to __mh_execute_header instead of real
-# Rust frames, so keep symbols/debug info in the shipped binary.
-strip = false
-debug = 2
+lto = "fat"
+strip = "symbols"
+debug = 0
 panic = "abort"
+
+[profile.detailed-release]
+inherits = "release"
+opt-level = 1
+lto = "thin"
+strip = "none"
+debug = "line-tables-only"
+split-debuginfo = "off"
+panic = "unwind"
+incremental = true
+codegen-units = 256
 
 [workspace.lints.rust]
 warnings = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docker_test)', 'cfg(throughput_test)', 'cfg(tokio_unstable)'] }
 
 [workspace.lints.clippy]
 redundant_clone = "deny"
 needless_collect = "deny"
 
 [patch.crates-io]
-shadowsocks = { git = "https://github.com/Watfaq/shadowsocks-rust", rev = "dee2d932dc580e0e1b7a5a591ff5f8c51f70495e" }
+rustls = { git = "https://github.com/Watfaq/rustls.git", branch = "watfaq/0.23.40" }
+tokio-rustls = { git = "https://github.com/Watfaq/tokio-rustls.git", branch = "watfaq/0.26.4" }
+

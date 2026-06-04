@@ -11,7 +11,7 @@ use crate::{
             ChainedDatagramWrapper, ChainedStream, ChainedStreamWrapper,
         },
         dns::ThreadSafeDNSResolver,
-        remote_content_manager::providers::proxy_provider::ThreadSafeProxyProvider,
+        remote_content_manager::providers::proxy_provider::ArcProxyProvider,
     },
     common::errors::new_io_error,
     proxy::{
@@ -34,7 +34,7 @@ pub struct HandlerOptions {
 
 pub struct Handler {
     opts: HandlerOptions,
-    providers: Vec<ThreadSafeProxyProvider>,
+    providers: Vec<ArcProxyProvider>,
 }
 
 impl std::fmt::Debug for Handler {
@@ -49,7 +49,7 @@ impl Handler {
     #[allow(clippy::new_ret_no_self)]
     pub fn new(
         opts: HandlerOptions,
-        providers: Vec<ThreadSafeProxyProvider>,
+        providers: Vec<ArcProxyProvider>,
     ) -> AnyOutboundHandler {
         Arc::new(Self { opts, providers })
     }
@@ -206,8 +206,6 @@ impl GroupProxyAPIResponse for Handler {
 #[cfg(all(test, docker_test))]
 mod tests {
 
-    use tokio::sync::RwLock;
-
     use super::*;
     use crate::{
         proxy::{
@@ -215,7 +213,9 @@ mod tests {
             utils::test_utils::{
                 Suite,
                 consts::*,
-                docker_runner::{DockerTestRunner, DockerTestRunnerBuilder},
+                docker_runner::{
+                    DockerTestRunner, DockerTestRunnerBuilder, alloc_docker_port,
+                },
                 run_test_suites_and_cleanup,
             },
         },
@@ -229,6 +229,7 @@ mod tests {
         let host = format!("0.0.0.0:{}", port);
         DockerTestRunnerBuilder::new()
             .image(IMAGE_SS_RUST)
+            .port(port)
             .entrypoint(&["ssserver"])
             .cmd(&["-s", &host, "-m", CIPHER, "-k", PASSWORD, "-U"])
             .build()
@@ -236,10 +237,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial]
     async fn test_relay_1() -> anyhow::Result<()> {
         initialize();
-        let port = 10002;
+        let port = alloc_docker_port();
         let container = get_ss_runner(port).await?;
 
         let container_ip = container.container_ip();
@@ -269,16 +269,14 @@ mod tests {
             .expect_proxies()
             .returning(move || vec![ss_handler.clone()]);
 
-        let handler =
-            Handler::new(Default::default(), vec![Arc::new(RwLock::new(provider))]);
+        let handler = Handler::new(Default::default(), vec![Arc::new(provider)]);
         run_test_suites_and_cleanup(handler, container, Suite::all()).await
     }
 
     #[tokio::test]
-    #[serial_test::serial]
     async fn test_relay_2() -> anyhow::Result<()> {
         initialize();
-        let port = 10002;
+        let port = alloc_docker_port();
         let container = get_ss_runner(port).await?;
 
         let container_ip = container.container_ip();
@@ -307,8 +305,7 @@ mod tests {
             .expect_proxies()
             .returning(move || vec![ss_handler.clone(), ss_handler.clone()]);
 
-        let handler =
-            Handler::new(Default::default(), vec![Arc::new(RwLock::new(provider))]);
+        let handler = Handler::new(Default::default(), vec![Arc::new(provider)]);
         run_test_suites_and_cleanup(handler, container, Suite::all()).await
     }
 }

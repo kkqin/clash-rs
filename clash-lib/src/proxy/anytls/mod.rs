@@ -28,6 +28,7 @@ use super::{
 };
 mod datagram;
 use datagram::OutboundDatagramAnytls;
+pub mod inbound;
 
 // AnyTLS frame command bytes (see the anytls protocol spec).
 const CMD_WASTE: u8 = 0;
@@ -484,6 +485,9 @@ mod tests {
     };
 
     #[cfg(docker_test)]
+    use std::io::Write;
+
+    #[cfg(docker_test)]
     use crate::{
         proxy::{
             transport,
@@ -491,12 +495,47 @@ mod tests {
                 Suite,
                 config_helper::test_config_base_dir,
                 consts::{IMAGE_SINGBOX, LOCAL_ADDR},
-                docker_runner::{DockerTestRunner, DockerTestRunnerBuilder},
+                docker_runner::{
+                    DockerTestRunner, DockerTestRunnerBuilder, alloc_docker_port,
+                },
                 run_test_suites_and_cleanup,
             },
         },
         tests::initialize,
     };
+
+    #[cfg(docker_test)]
+    const ANYTLS_SERVER_CONFIG: &str = r#"{
+    "log": {
+        "level": "info"
+    },
+    "inbounds": [
+        {
+            "type": "anytls",
+            "tag": "anytls-in",
+            "listen": "0.0.0.0",
+            "listen_port": 10002,
+            "users": [
+                {
+                    "name": "user",
+                    "password": "example"
+                }
+            ],
+            "padding_scheme": ["stop=0"],
+            "tls": {
+                "enabled": true,
+                "certificate_path": "/etc/ssl/v2ray/fullchain.pem",
+                "key_path": "/etc/ssl/v2ray/privkey.pem"
+            }
+        }
+    ],
+    "outbounds": [
+        {
+            "type": "direct",
+            "tag": "direct"
+        }
+    ]
+}"#;
 
     fn make_handler(udp: bool, with_tls: bool) -> Handler {
         use crate::proxy::transport::TlsClient;
@@ -508,12 +547,17 @@ mod tests {
             password: "secret".to_owned(),
             udp,
             tls: if with_tls {
-                Some(Box::new(TlsClient::new(
-                    true,
-                    "example.org".to_owned(),
-                    None,
-                    None,
-                )))
+                Some(Box::new(
+                    TlsClient::new(
+                        true,
+                        "example.org".to_owned(),
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .expect("failed to create TLS client"),
+                ))
             } else {
                 None
             },
@@ -798,38 +842,46 @@ mod tests {
     // ---- docker integration tests ----
 
     #[cfg(docker_test)]
-    async fn get_runner() -> anyhow::Result<DockerTestRunner> {
+    async fn get_runner(host_port: u16) -> anyhow::Result<DockerTestRunner> {
         let test_config_dir = test_config_base_dir();
-        let conf = test_config_dir.join("anytls.json");
-        let cert = test_config_dir.join("example.org.pem");
-        let key = test_config_dir.join("example.org-key.pem");
+        let cert = test_config_dir.join("certs/example.org.pem");
+        let key = test_config_dir.join("certs/example.org-key.pem");
 
-        DockerTestRunnerBuilder::new()
+        let mut tmp = tempfile::NamedTempFile::new()?;
+        tmp.write_all(ANYTLS_SERVER_CONFIG.as_bytes())?;
+
+        let result = DockerTestRunnerBuilder::new()
             .image(IMAGE_SINGBOX)
             .cmd(&["run", "-c", "/etc/sing-box/config.json"])
             .mounts(&[
-                (conf.to_str().unwrap(), "/etc/sing-box/config.json"),
+                (tmp.path().to_str().unwrap(), "/etc/sing-box/config.json"),
                 (cert.to_str().unwrap(), "/etc/ssl/v2ray/fullchain.pem"),
                 (key.to_str().unwrap(), "/etc/ssl/v2ray/privkey.pem"),
             ])
+            .host_port(host_port, 10002)
             .build()
-            .await
+            .await;
+        drop(tmp);
+        result
     }
 
     #[cfg(docker_test)]
     #[tokio::test]
-    #[serial_test::serial]
     async fn test_anytls() -> anyhow::Result<()> {
         initialize();
+        let host_port = alloc_docker_port();
 
         let tls = transport::TlsClient::new(
             true,
             "example.org".to_owned(),
             Some(vec!["http/1.1".to_owned(), "h2".to_owned()]),
             None,
-        );
+            None,
+            None,
+        )
+        .expect("failed to create TLS client");
 
-        let runner = get_runner().await?;
+        let runner = get_runner(host_port).await?;
 
         let opts = HandlerOptions {
             name: "test-anytls".to_owned(),
@@ -846,5 +898,126 @@ mod tests {
             .register_connector(GLOBAL_DIRECT_CONNECTOR.clone())
             .await;
         run_test_suites_and_cleanup(handler, runner, Suite::all()).await
+    }
+}
+
+#[cfg(all(test, docker_test, throughput_test))]
+mod e2e {
+    use std::io::Write as _;
+
+    use crate::{
+        proxy::utils::test_utils::{
+            config_helper,
+            consts::*,
+            docker_runner::{
+                DockerTestRunner, DockerTestRunnerBuilder, RunAndCleanup,
+            },
+            docker_utils::{
+                alloc_port, clash_process_e2e_throughput, find_clash_rs_binary,
+            },
+        },
+        tests::initialize,
+    };
+
+    const CONTAINER_PORT: u16 = 10002;
+    const E2E_PAYLOAD_BYTES: usize = 32 * 1024 * 1024; // 32 MB
+
+    const ANYTLS_SERVER_CONFIG: &str = r#"{
+    "log": {"level": "info"},
+    "inbounds": [{
+        "type": "anytls",
+        "tag": "anytls-in",
+        "listen": "0.0.0.0",
+        "listen_port": 10002,
+        "users": [{"name": "user", "password": "example"}],
+        "padding_scheme": ["stop=0"],
+        "tls": {
+            "enabled": true,
+            "certificate_path": "/etc/ssl/v2ray/fullchain.pem",
+            "key_path": "/etc/ssl/v2ray/privkey.pem"
+        }
+    }],
+    "outbounds": [{"type": "direct", "tag": "direct"}]
+}"#;
+
+    async fn get_anytls_runner() -> anyhow::Result<DockerTestRunner> {
+        let test_config_dir = config_helper::test_config_base_dir();
+        let cert = test_config_dir.join("certs/example.org.pem");
+        let key = test_config_dir.join("certs/example.org-key.pem");
+
+        let mut tmp = tempfile::NamedTempFile::new()?;
+        tmp.write_all(ANYTLS_SERVER_CONFIG.as_bytes())?;
+
+        let runner = DockerTestRunnerBuilder::new()
+            .image(IMAGE_SINGBOX)
+            .cmd(&["run", "-c", "/etc/sing-box/config.json"])
+            .no_port()
+            .mounts(&[
+                (tmp.path().to_str().unwrap(), "/etc/sing-box/config.json"),
+                (cert.to_str().unwrap(), "/etc/ssl/v2ray/fullchain.pem"),
+                (key.to_str().unwrap(), "/etc/ssl/v2ray/privkey.pem"),
+            ])
+            .build()
+            .await?;
+        drop(tmp);
+        Ok(runner)
+    }
+
+    #[tokio::test]
+    async fn e2e_throughput_anytls_tls() -> anyhow::Result<()> {
+        initialize();
+        let socks_port = alloc_port();
+        let echo_port = alloc_port();
+
+        let container = get_anytls_runner().await?;
+        let server = container.container_ip().unwrap_or(LOCAL_ADDR.to_owned());
+        let gateway_ip = container.docker_gateway_ip();
+
+        let mmdb = config_helper::test_config_base_dir()
+            .join("Country.mmdb")
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let config = format!(
+            r#"
+socks-port: {socks_port}
+bind-address: 127.0.0.1
+mmdb: "{mmdb}"
+mode: global
+log-level: error
+proxies:
+  - name: proxy
+    type: anytls
+    server: {server}
+    port: {port}
+    password: example
+    skip-cert-verify: true
+    sni: example.org
+    udp: false
+rules:
+  - MATCH,proxy
+"#,
+            socks_port = socks_port,
+            mmdb = mmdb,
+            server = server,
+            port = CONTAINER_PORT,
+        );
+        let binary = find_clash_rs_binary();
+
+        container
+            .run_and_cleanup(async move {
+                clash_process_e2e_throughput(
+                    &binary,
+                    &config,
+                    "anytls-tls",
+                    socks_port,
+                    echo_port,
+                    gateway_ip,
+                    E2E_PAYLOAD_BYTES,
+                )
+                .await
+                .map(|_| ())
+            })
+            .await
     }
 }

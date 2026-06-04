@@ -20,9 +20,45 @@ A custom protocol, rule based network proxy software.
 - 🌈 Flexible traffic routing rules based off source/destination IP/Domain/GeoIP etc.
 - 📦 Local anti spoofing DNS with support of UDP/TCP/DoH/DoT remote, and expose it as a local UDP/TCP/DoH/DoT server.
 - ⚙️ AnyTLS/Hysteria2/Shadowquic/Shadowsocks/Socks5(TCP/UDP)/SSH/Tailscale/tor(onion)/Trojan/Tuic/VLess/Vmess/Wireguard(userspace) outbound support with different underlying transports(gRPC/TLS/H2/WebSocket/etc.).
-- 🔀 Multiple inbound modes: HTTP, SOCKS5, Mixed, Shadowsocks, Redir, TProxy, and TUN (utun) for transparent proxying.
+- 🔀 Multiple inbound modes: HTTP, SOCKS5, Mixed, Shadowsocks, AnyTLS, Redir, TProxy, and TUN (utun) for transparent proxying.
 - 🌍 Dynamic remote rule/proxy loader.
 - 🎵 Tracing with Jaeger
+
+## 📡 Protocol Support
+
+### Inbounds
+
+| Type | Description | Notes |
+|------|-------------|-------|
+| `http` | HTTP proxy | |
+| `socks` | SOCKS5 (TCP + UDP) | |
+| `mixed` | HTTP + SOCKS5 on a single port | |
+| `shadowsocks` | Shadowsocks inbound with multi-user support | `shadowsocks` feature |
+| `anytls` | AnyTLS inbound with multi-user support, GFW fallback camouflage | |
+| `tun` | TUN device for transparent proxying | All platforms |
+| `tproxy` | Transparent proxy (TCP + UDP) | Linux; `tproxy` feature |
+| `redir` | TCP redirect | Linux; `redir` feature |
+| `tunnel` | Routes all traffic to a fixed target | |
+
+### Outbounds
+
+| Protocol | Transports | Notes |
+|----------|-----------|-------|
+| `direct` | — | |
+| `reject` | — | |
+| `ss` | plain · obfs-http · obfs-tls · v2ray-plugin-ws · v2ray-plugin-ws-tls · shadow-tls | `shadowsocks` feature |
+| `socks5` | plain TCP · TLS | |
+| `anytls` | TLS | |
+| `trojan` | TLS · WebSocket+TLS · gRPC+TLS | |
+| `vmess` | TCP · TCP+TLS · WebSocket+TLS · H2+TLS · gRPC+TLS | |
+| `vless` | TLS · WebSocket+TLS · H2+TLS · gRPC+TLS · REALITY | |
+| `wireguard` | UDP (userspace) | `wireguard` feature |
+| `hysteria2` | QUIC · obfs-salamander | |
+| `tuic` | QUIC (bbr / cubic / new_reno) | `tuic` feature |
+| `shadowquic` | QUIC · over-stream | `shadowquic` feature |
+| `ssh` | SSH tunnel | `ssh` feature |
+| `tor` | Onion routing | `onion` feature (`plus` build) |
+| `tailscale` | Mesh VPN | `tailscale` feature (`plus` build) |
 
 ## 🖥 Environment Support
 
