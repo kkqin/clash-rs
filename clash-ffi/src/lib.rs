@@ -77,6 +77,7 @@ pub unsafe extern "C" fn clash_start_with_tun_fd(
             cwd: Some(cwd_str),
             rt,
             log_file: Some(log_str),
+            config_path: None,
         };
 
         match start_scaffold_with_tun_fd(options, tun_fd as u32) {
