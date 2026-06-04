@@ -150,7 +150,7 @@ impl OutboundManager {
         #[cfg(all(target_os = "macos", feature = "tun"))]
         {
             use crate::proxy::tun::routes::subscribe_netchange;
-            let providers: Vec<ThreadSafeProxyProvider> =
+            let providers: Vec<ArcProxyProvider> =
                 m.proxy_providers.values().cloned().collect();
             tokio::spawn(async move {
                 let mut rx = subscribe_netchange();
@@ -161,7 +161,7 @@ impl OutboundManager {
                             for p in &providers {
                                 let p = p.clone();
                                 tokio::spawn(async move {
-                                    p.read().await.healthcheck().await;
+                                    p.healthcheck().await;
                                 });
                             }
                         }

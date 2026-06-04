@@ -1,10 +1,9 @@
 use aes::Aes256;
-use aes::cipher::block_padding::Pkcs7;
-use cbc::{
-    Decryptor, Encryptor,
-    cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit},
-};
-use rand::{TryRngCore, rngs::OsRng};
+use cipher::block_padding::Pkcs7;
+use cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit};
+use cbc::{Decryptor, Encryptor};
+use rand::rngs::SysRng;
+use rand::TryRng;
 use std::{cmp::PartialEq, io};
 
 #[derive(PartialEq)]
@@ -42,7 +41,7 @@ impl CbcCipher {
         let mut ciphertext_vec = ciphertext.to_vec();
 
         let plaintext = cipher
-            .decrypt_padded_mut::<Pkcs7>(&mut ciphertext_vec)
+            .decrypt_padded::<Pkcs7>(&mut ciphertext_vec)
             .map_err(|_| io::ErrorKind::InvalidData)?;
         Ok(plaintext.to_vec())
     }
@@ -53,8 +52,8 @@ impl CbcCipher {
         }
         // 生成 16 字节随机 IV
         let mut iv = [0u8; 16];
-        OsRng
-            .try_fill_bytes(&mut iv)
+        let mut rng = SysRng::default();
+        rng.try_fill_bytes(&mut iv)
             .map_err(|_| io::ErrorKind::Other)?;
 
         // 创建加密器
@@ -67,7 +66,7 @@ impl CbcCipher {
         let mut plaintext = vec![0u8; buf.len() + block_size];
         plaintext[..buf.len()].copy_from_slice(buf);
         let ciphertext = cipher
-            .encrypt_padded_mut::<Pkcs7>(&mut plaintext, buf.len())
+            .encrypt_padded::<Pkcs7>(&mut plaintext, buf.len())
             .map_err(|_| io::ErrorKind::Other)?;
 
         // 输出为 [IV || Ciphertext]

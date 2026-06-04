@@ -39,7 +39,9 @@ impl TryFrom<&OutboundZdt> for Handler {
                     .unwrap_or(s.common_opts.server.to_owned()),
                 None,
                 None,
-            );
+                None,
+                None,
+            )?;
             Some(Box::new(client) as _)
         } else {
             None
