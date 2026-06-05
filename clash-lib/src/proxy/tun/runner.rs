@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use futures::{FutureExt, SinkExt, StreamExt, future::BoxFuture};
 use tokio_util::sync::CancellationToken;
@@ -35,6 +36,7 @@ pub struct TunRunner {
     dispatcher: Arc<Dispatcher>,
     resolver: ThreadSafeDNSResolver,
     cancellation_token: CancellationToken,
+    task: Mutex<Option<tokio::task::JoinHandle<Result<(), Error>>>>,
 }
 
 impl TunRunner {
@@ -49,6 +51,7 @@ impl TunRunner {
             dispatcher,
             resolver,
             cancellation_token: cancellation_token.unwrap_or_default(),
+            task: Mutex::new(None),
         })
     }
 
@@ -153,7 +156,15 @@ impl TunRunner {
                             if cfg!(windows) { 65535u16 } else { 1500u16 },
                         ));
 
-                    if !tun_exist {
+                    // IMPORTANT (macOS): during config reload, the previous utun
+                    // may still be visible briefly after shutdown, causing
+                    // `tun_exist=true` even though a *new* device will be created.
+                    // If we skip address configuration in that case, the new
+                    // utun comes up without IPs and traffic breaks.
+                    //
+                    // So on macOS we always (re)apply IP configuration.
+                    let should_configure_addrs = !tun_exist || cfg!(target_os = "macos");
+                    if should_configure_addrs {
                         debug!("setting tun ipv4 addr: {:?}", cfg.gateway);
                         tun_builder = tun_builder.ipv4(
                             cfg.gateway.addr(),
@@ -232,10 +243,26 @@ impl TunRunner {
                             return Err(Error::Operation(err_msg));
                         }
 
-                        info!("setting up routes for tun {}", &tun_name);
+                        info!("setting up routes for tun {} (existing=false)", &tun_name);
                         maybe_add_routes(cfg, &tun_name)?;
                     } else {
-                        info!("skipping route setup for existing tun {}", &tun_name);
+                        // On macOS, config reload calls TunRunner::shutdown(), which
+                        // cleans up routes. If we skip route setup just because the
+                        // utun interface still exists, the restarted tun will have no
+                        // routes and traffic will break.
+                        #[cfg(target_os = "macos")]
+                        {
+                            info!(
+                                "setting up routes for tun {} (existing=true)",
+                                &tun_name
+                            );
+                            maybe_add_routes(cfg, &tun_name)?;
+                        }
+
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            info!("skipping route setup for existing tun {}", &tun_name);
+                        }
                     }
 
                     dev
@@ -321,7 +348,7 @@ impl Runner for TunRunner {
         let dns_hijack = self.cfg.dns_hijack;
         let cancellation_token = self.cancellation_token.clone();
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let (tun, stack, mut tcp_listener, udp_socket) =
                 TunRunner::new_internal(&cfg)
                     .await
@@ -458,6 +485,15 @@ impl Runner for TunRunner {
                 }
             }
         });
+
+        let mut slot = self.task.lock().expect("tun runner task mutex poisoned");
+        if let Some(prev) = slot.as_ref() {
+            if !prev.is_finished() {
+                warn!("tun runner is already running; ignoring duplicate start");
+                return;
+            }
+        }
+        *slot = Some(handle);
     }
 
     fn shutdown(&self) {
@@ -477,6 +513,30 @@ impl Runner for TunRunner {
     }
 
     fn join(&self) -> BoxFuture<'_, Result<(), Error>> {
-        async move { Ok(()) }.boxed()
+        async move {
+            let handle = {
+                let mut slot =
+                    self.task.lock().expect("tun runner task mutex poisoned");
+                slot.take()
+            };
+
+            if let Some(handle) = handle {
+                match handle.await {
+                    Ok(res) => {
+                        // The task returns Ok on a normal shutdown.
+                        res?;
+                    }
+                    Err(e) => {
+                        return Err(Error::Operation(format!(
+                            "tun runner join error: {}",
+                            e
+                        )));
+                    }
+                }
+            }
+
+            Ok(())
+        }
+        .boxed()
     }
 }

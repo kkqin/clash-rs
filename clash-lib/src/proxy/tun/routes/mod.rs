@@ -216,6 +216,7 @@ pub struct RouteMonitorRunner {
     enable: bool,
     cancellation_token: CancellationToken,
     route_sock_fd: Arc<AtomicI32>,
+    task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 #[cfg(target_os = "macos")]
@@ -228,6 +229,7 @@ impl RouteMonitorRunner {
             enable,
             cancellation_token: cancellation_token.unwrap_or_default(),
             route_sock_fd: Arc::new(AtomicI32::new(-1)),
+            task: std::sync::Mutex::new(None),
         }
     }
 
@@ -308,6 +310,15 @@ impl RouteMonitorRunner {
                         Some(code)
                             if code == libc::EBADF || code == libc::ENOTCONN =>
                         {
+                            if cancellation_token.is_cancelled() {
+                                warn!(
+                                    "route monitor stopping after shutdown (fd error: {:?})",
+                                    err
+                                );
+                                route_sock_fd.store(-1, Ordering::Release);
+                                break 'restart;
+                            }
+
                             error!("route monitor fatal error: {:?}", err);
                             // close and restart
                             unsafe { libc::close(rtsock) };
@@ -379,22 +390,46 @@ impl Runner for RouteMonitorRunner {
 
         let cancellation_token = self.cancellation_token.clone();
         let route_sock_fd = self.route_sock_fd.clone();
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             RouteMonitorRunner::monitor(cancellation_token, route_sock_fd).await;
         });
+
+        let mut slot = self.task.lock().expect("route monitor task mutex poisoned");
+        if let Some(prev) = slot.as_ref() {
+            if !prev.is_finished() {
+                warn!("route monitor is already running; ignoring duplicate start");
+                return;
+            }
+        }
+        *slot = Some(handle);
     }
 
     fn shutdown(&self) {
         warn!("shutting down route monitor");
+        // Signal cancellation first so monitor sees is_cancelled() = true
+        // before we close the fd (avoiding EBADF during read).
+        self.cancellation_token.cancel();
+
         let fd = self.route_sock_fd.swap(-1, Ordering::AcqRel);
         if fd >= 0 {
             // Unblock a potentially blocking read(PF_ROUTE).
             unsafe { libc::close(fd) };
         }
-        self.cancellation_token.cancel();
     }
 
     fn join(&self) -> BoxFuture<'_, Result<(), crate::Error>> {
-        Box::pin(async { Ok(()) })
+        Box::pin(async {
+            let handle = {
+                let mut slot =
+                    self.task.lock().expect("route monitor task mutex poisoned");
+                slot.take()
+            };
+
+            if let Some(handle) = handle {
+                let _ = handle.await;
+            }
+
+            Ok(())
+        })
     }
 }

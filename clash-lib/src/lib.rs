@@ -384,6 +384,7 @@ pub async fn start(
     let global_state_for_reload = global_state.clone();
     let mut api_listener_for_reload = api_listener.clone();
     tokio::spawn(async move {
+        let mut components = components;
         // Listen for config reload signal and reload config
         while let Some((config, done)) = reload_rx.recv().await {
             info!("reloading config");
@@ -409,11 +410,21 @@ pub async fn start(
 
             components.stop_all();
 
+            // Ensure TUN + route monitor are fully stopped on macOS before
+            // recreating them. This avoids utun "exists" races during reload.
+            #[cfg(feature = "tun")]
+            components.tun_runner.join().await.ok();
+            #[cfg(all(feature = "tun", target_os = "macos"))]
+            components.route_monitor.join().await.ok();
+
             // Wait for the old DNS listener to fully stop before starting the new
             // one, to avoid EADDRINUSE on the same port.
             old_dns_listener.join().await.ok();
 
             new_components.start_all();
+
+            // Subsequent reloads must stop the currently running components.
+            components = new_components;
 
             // TODO: every reload is causing the API server to restart, we should
             // make the API server reloadable instead of restarting it.
@@ -423,30 +434,30 @@ pub async fn start(
             let new_api_listener: ArcRunner = Arc::new(app::api::ApiRunner::new(
                 controller_cfg,
                 log_tx.clone(),
-                new_components.inbound_manager.clone(),
-                new_components.dispatcher.clone(),
+                components.inbound_manager.clone(),
+                components.dispatcher.clone(),
                 global_state_for_reload.clone(),
-                new_components.dns_resolver.clone(),
-                new_components.outbound_manager.clone(),
-                new_components.statistics_manager.clone(),
-                new_components.cache_store.clone(),
-                new_components.router.clone(),
+                components.dns_resolver.clone(),
+                components.outbound_manager.clone(),
+                components.statistics_manager.clone(),
+                components.cache_store.clone(),
+                components.router.clone(),
                 cwd_clone.to_string_lossy().to_string(),
                 Some(reload_token.child_token()),
-                new_components.dns_listen.clone(),
-                new_components.dns_enabled,
+                components.dns_listen.clone(),
+                components.dns_enabled,
             ));
             let mut g = global_state_for_reload.lock().await;
 
             #[cfg(feature = "tun")]
             {
-                g.tunnel_runner = new_components.tun_runner.clone();
+                g.tunnel_runner = components.tun_runner.clone();
             }
             #[cfg(all(feature = "tun", target_os = "macos"))]
             {
-                g.route_monitor = new_components.route_monitor.clone();
+                g.route_monitor = components.route_monitor.clone();
             }
-            g.dns_listener = new_components.dns_listener.clone();
+            g.dns_listener = components.dns_listener.clone();
 
             api_listener_for_reload.shutdown();
             // Wait for the old API server to fully stop before starting the new
