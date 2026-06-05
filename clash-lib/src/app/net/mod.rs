@@ -144,8 +144,19 @@ pub fn get_outbound_interface() -> Option<OutboundInterface> {
         .into_iter()
         .map(Into::into)
         .filter(|iface: &OutboundInterface| {
-            !iface.name.contains("tun")
-                && (iface.addr_v4.is_some() || iface.addr_v6.is_some())
+            // Exclude TUN devices
+            if iface.name.contains("tun") {
+                return false;
+            }
+            // Exclude Hyper-V virtual adapters on Windows
+            if cfg!(target_os = "windows")
+                && (iface.name.starts_with("vEthernet")
+                    || iface.name.starts_with("vSwitch")
+                    || iface.name.contains("Hyper-V"))
+            {
+                return false;
+            }
+            iface.addr_v4.is_some() || iface.addr_v6.is_some()
         })
         .collect::<Vec<_>>();
 
@@ -177,16 +188,18 @@ pub fn get_outbound_interface() -> Option<OutboundInterface> {
             }
             _ => {}
         }
-        let left = priority
-            .iter()
-            .position(|x| left.name.contains(x))
-            .unwrap_or(usize::MAX);
-        let right = priority
-            .iter()
-            .position(|x| right.name.contains(x))
-            .unwrap_or(usize::MAX);
+        // Use a priority matcher function for more precise matching
+        let match_priority = |name: &str, priorities: &[&str]| {
+            priorities
+                .iter()
+                .position(|x| name.starts_with(x))
+                .unwrap_or(usize::MAX)
+        };
 
-        left.cmp(&right)
+        let left_priority = match_priority(&left.name, priority);
+        let right_priority = match_priority(&right.name, priority);
+
+        left_priority.cmp(&right_priority)
     });
 
     trace!(
