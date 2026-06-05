@@ -26,7 +26,10 @@ pub async fn init_net_config(tun_somark: Option<u32>) {
     // own connections from TUN routing, so interface binding is unnecessary.
     #[cfg(not(target_os = "ios"))]
     {
-        *DEFAULT_OUTBOUND_INTERFACE.write().await = get_outbound_interface();
+        let mut default_iface = DEFAULT_OUTBOUND_INTERFACE.write().await;
+        if default_iface.is_none() {
+            *default_iface = get_outbound_interface();
+        }
     }
     *TUN_SOMARK.write().await = tun_somark;
 

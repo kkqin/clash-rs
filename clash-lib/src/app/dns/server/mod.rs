@@ -1,4 +1,5 @@
 use hickory_proto::op::Message;
+use std::sync::Mutex as StdMutex;
 
 use tracing::{error, info, instrument};
 use watfaq_dns::DNSListenAddr;
@@ -37,6 +38,7 @@ pub struct DnsRunner {
     cwd: std::path::PathBuf,
 
     cancellation_token: tokio_util::sync::CancellationToken,
+    task_handle: StdMutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl DnsRunner {
@@ -53,6 +55,7 @@ impl DnsRunner {
             resolver,
             cwd: cwd.to_path_buf(),
             cancellation_token: cancellation_token.unwrap_or_default(),
+            task_handle: StdMutex::new(None),
         }
     }
 }
@@ -69,7 +72,7 @@ impl Runner for DnsRunner {
         let cwd = self.cwd.clone();
         let cancellation_token = self.cancellation_token.clone();
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let h = DnsMessageExchanger { resolver };
             let r = watfaq_dns::get_dns_listener(listen, h, &cwd).await;
             if let Some(r) = r {
@@ -91,6 +94,7 @@ impl Runner for DnsRunner {
                 info!("dns listener: no listen addresses configured, skipping");
             }
         });
+        *self.task_handle.lock().unwrap() = Some(handle);
     }
 
     fn shutdown(&self) {
@@ -99,6 +103,12 @@ impl Runner for DnsRunner {
     }
 
     fn join(&self) -> futures::future::BoxFuture<'_, Result<(), crate::Error>> {
-        Box::pin(async move { Ok(()) })
+        Box::pin(async move {
+            let handle = self.task_handle.lock().unwrap().take();
+            if let Some(h) = handle {
+                let _ = h.await;
+            }
+            Ok(())
+        })
     }
 }

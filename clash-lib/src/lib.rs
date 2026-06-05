@@ -402,7 +402,17 @@ pub async fn start(
 
             let _ = done.send(());
 
+            let old_dns_listener = {
+                let g = global_state_for_reload.lock().await;
+                g.dns_listener.clone()
+            };
+
             components.stop_all();
+
+            // Wait for the old DNS listener to fully stop before starting the new
+            // one, to avoid EADDRINUSE on the same port.
+            old_dns_listener.join().await.ok();
+
             new_components.start_all();
 
             // TODO: every reload is causing the API server to restart, we should
