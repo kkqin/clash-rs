@@ -78,14 +78,28 @@ struct Cli {
 
     #[clap(
         long,
-        value_parser,
-        action = clap::ArgAction::Set,
-        default_value_t = true,
         help = "Enable compatibility mode, which make behaviors more consistent \
                 with mihomo but may cause some issues. It is recommended to enable \
                 this if you are using clash verge."
     )]
     compatibility: bool,
+
+    #[clap(
+        long,
+        help = "Reject configuration files that contain unrecognised fields. By \
+                default clash-rs silently ignores unknown fields so that profiles \
+                shared with other clients (e.g. clash-for-android) load without \
+                errors."
+    )]
+    strict_config: bool,
+}
+
+/// Returns `true` if the env var is set to `1` or `true` (case-insensitive).
+fn env_truthy(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(v) => matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true"),
+        Err(_) => false,
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -101,7 +115,13 @@ fn main() -> anyhow::Result<()> {
             _ => arg,
         })
         .collect();
-    let cli = Cli::parse_from(args);
+    let mut cli = Cli::parse_from(args);
+
+    // Either `--compatibility` OR `CLASH_RS_COMPATIBILITY_MODE=1|true` enables
+    // compatibility mode. The env var is useful when the command line is fixed
+    // (containers, init systems, GUI launchers).
+    cli.compatibility =
+        cli.compatibility || env_truthy("CLASH_RS_COMPATIBILITY_MODE");
 
     if cli.version {
         println!(
@@ -141,8 +161,17 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
+    let parse_config = || {
+        let cfg = clash::Config::File(file.clone());
+        if cli.strict_config {
+            cfg.try_parse_strict()
+        } else {
+            cfg.try_parse()
+        }
+    };
+
     if cli.test_config {
-        match clash::Config::File(file.clone()).try_parse() {
+        match parse_config() {
             Ok(_) => {
                 println!("configuration file {file} test is successful");
                 exit(0);
@@ -175,7 +204,7 @@ fn main() -> anyhow::Result<()> {
         )));
     }
 
-    let mut config = clash::Config::File(file.clone()).try_parse()?;
+    let mut config = parse_config()?;
 
     config.general.controller.external_controller_ipc = cli.controller_ipc;
     if cli.compatibility {
@@ -221,4 +250,48 @@ fn main() -> anyhow::Result<()> {
     })
     .inspect_err(|err| eprintln!("Failed to start clash: {err}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod env_truthy_tests {
+    use super::env_truthy;
+    use std::sync::Mutex;
+
+    const KEY: &str = "CLASH_RS_COMPATIBILITY_MODE_TEST";
+    // Cargo runs tests in parallel — serialize env-var mutation within this
+    // module so the three cases don't observe each other's writes.
+    static GUARD: Mutex<()> = Mutex::new(());
+
+    fn with<F: FnOnce()>(value: Option<&str>, f: F) {
+        let _g = GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        match value {
+            Some(v) => unsafe { std::env::set_var(KEY, v) },
+            None => unsafe { std::env::remove_var(KEY) },
+        }
+        f();
+        unsafe { std::env::remove_var(KEY) };
+    }
+
+    #[test]
+    fn unset_is_false() {
+        with(None, || assert!(!env_truthy(KEY)));
+    }
+
+    #[test]
+    fn accepts_one_and_true_case_insensitive() {
+        for v in ["1", "true", "TRUE", "True", " true ", "  1 "] {
+            with(Some(v), || {
+                assert!(env_truthy(KEY), "{v:?} should be truthy")
+            });
+        }
+    }
+
+    #[test]
+    fn rejects_other_values() {
+        for v in ["0", "false", "yes", "on", "", "2", "truthy"] {
+            with(Some(v), || {
+                assert!(!env_truthy(KEY), "{v:?} should be falsy")
+            });
+        }
+    }
 }
