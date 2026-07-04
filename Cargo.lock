@@ -1388,7 +1388,7 @@ dependencies = [
  "sha2 0.11.0",
  "shadowquic",
  "shadowsocks",
- "smoltcp 0.12.0",
+ "smoltcp 0.13.1",
  "sock2proc",
  "socket2 0.6.4",
  "ssh-key 0.6.7",
@@ -5014,7 +5014,7 @@ dependencies = [
  "etherparse 0.16.0",
  "futures",
  "rand 0.8.6",
- "smoltcp 0.12.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "smoltcp 0.12.0",
  "spin 0.9.8",
  "tokio",
  "tokio-util",
@@ -8247,6 +8247,8 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 [[package]]
 name = "smoltcp"
 version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dad095989c1533c1c266d9b1e8d70a1329dd3723c3edac6d03bbd67e7bf6f4bb"
 dependencies = [
  "bitflags 1.3.2",
  "byteorder",
@@ -8259,15 +8261,13 @@ dependencies = [
 
 [[package]]
 name = "smoltcp"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dad095989c1533c1c266d9b1e8d70a1329dd3723c3edac6d03bbd67e7bf6f4bb"
+version = "0.13.1"
 dependencies = [
  "bitflags 1.3.2",
  "byteorder",
  "cfg-if",
  "defmt 0.3.100",
- "heapless 0.8.0",
+ "heapless 0.9.3",
  "log",
  "managed",
 ]
@@ -10677,7 +10677,7 @@ dependencies = [
  "bytes",
  "flume",
  "heapless 0.9.3",
- "smoltcp 0.13.1",
+ "smoltcp 0.13.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -11405,7 +11405,7 @@ dependencies = [
  "netstack-lwip",
  "netstack-smoltcp",
  "rand 0.10.1",
- "smoltcp 0.12.0",
+ "smoltcp 0.13.1",
  "socket2 0.6.4",
  "tokio",
  "tracing",
