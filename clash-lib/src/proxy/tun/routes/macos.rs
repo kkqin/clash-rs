@@ -326,8 +326,141 @@ pub(crate) fn maybe_delete_host_route_for_addr(ip: &std::net::IpAddr) -> std::io
     Ok(())
 }
 
+/// Snapshot of the original DNS servers for every network service, captured
+/// before we override them for DNS hijack so they can be restored on shutdown.
+///
+/// macOS does not give us a per-interface "hijack port 53" primitive like
+/// Linux (`ip rule dport 53`) or a TUN-adapter DNS setting like Windows.
+/// Instead we point every network service's DNS at the TUN gateway IP. Because
+/// that IP lives inside the TUN subnet, the system's DNS queries are routed
+/// into the utun where [`super::super::datagram`] hijacks UDP/53 and answers
+/// them from the embedded resolver. Without this, applications keep querying
+/// the physical interface's DNS server directly, which is a DNS leak.
+static SAVED_DNS_SERVERS: std::sync::Mutex<Option<Vec<(String, Vec<String>)>>> =
+    std::sync::Mutex::new(None);
+
+/// List the names of all configured network services (e.g. "Wi-Fi",
+/// "Ethernet"). Skips the header line printed by `networksetup`.
+fn list_network_services() -> std::io::Result<Vec<String>> {
+    let out = std::process::Command::new("networksetup")
+        .arg("-listallnetworkservices")
+        .output()?;
+    if !out.status.success() {
+        return Err(new_io_error("failed to list network services"));
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let services = stdout
+        .lines()
+        .skip(1) // first line is an informational header
+        .map(|l| l.trim_start_matches('*').trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    Ok(services)
+}
+
+/// Read the currently configured DNS servers for a network service. When none
+/// are explicitly set, `networksetup` prints a human-readable sentence rather
+/// than addresses; that case is represented as an empty list (meaning "DHCP /
+/// automatic").
+fn get_dns_servers(service: &str) -> std::io::Result<Vec<String>> {
+    let out = std::process::Command::new("networksetup")
+        .arg("-getdnsservers")
+        .arg(service)
+        .output()?;
+    if !out.status.success() {
+        return Err(new_io_error("failed to get dns servers"));
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // "There aren't any DNS Servers set on <service>." => no explicit servers.
+    if stdout.contains("aren't any") {
+        return Ok(vec![]);
+    }
+    Ok(stdout
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| l.parse::<std::net::IpAddr>().is_ok())
+        .collect())
+}
+
+/// Override every network service's DNS server with the TUN gateway IP so
+/// system DNS queries are funneled into the utun and hijacked. The previous
+/// configuration is saved to [`SAVED_DNS_SERVERS`] for restoration.
+pub fn setup_dns_hijack(cfg: &TunConfig) -> std::io::Result<()> {
+    if !cfg.dns_hijack {
+        return Ok(());
+    }
+
+    // Use the TUN gateway IP; it sits inside the TUN subnet so queries enter
+    // the utun and get hijacked on UDP/53.
+    let dns_ip = cfg.gateway.addr().to_string();
+
+    let services = list_network_services()?;
+    let mut saved = Vec::new();
+
+    for service in services {
+        match get_dns_servers(&service) {
+            Ok(servers) => saved.push((service.clone(), servers)),
+            Err(e) => {
+                warn!("failed to read dns servers for {service}: {e}");
+                continue;
+            }
+        }
+
+        let out = std::process::Command::new("networksetup")
+            .arg("-setdnsservers")
+            .arg(&service)
+            .arg(&dns_ip)
+            .output()?;
+        if out.status.success() {
+            warn!("dns hijack: set DNS for {service} -> {dns_ip}");
+        } else {
+            warn!(
+                "dns hijack: failed to set DNS for {service}: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+    }
+
+    *SAVED_DNS_SERVERS.lock().unwrap() = Some(saved);
+    Ok(())
+}
+
+/// Restore the DNS servers captured by [`setup_dns_hijack`]. Services that had
+/// no explicit DNS configuration are reset to "Empty" (automatic/DHCP).
+pub fn restore_dns_hijack() {
+    let Some(saved) = SAVED_DNS_SERVERS.lock().unwrap().take() else {
+        return;
+    };
+
+    for (service, servers) in saved {
+        let mut cmd = std::process::Command::new("networksetup");
+        cmd.arg("-setdnsservers").arg(&service);
+        if servers.is_empty() {
+            cmd.arg("Empty");
+        } else {
+            cmd.args(&servers);
+        }
+        match cmd.output() {
+            Ok(out) if out.status.success() => {
+                warn!("dns hijack: restored DNS for {service}");
+            }
+            Ok(out) => {
+                warn!(
+                    "dns hijack: failed to restore DNS for {service}: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                );
+            }
+            Err(e) => {
+                warn!("dns hijack: failed to restore DNS for {service}: {e}");
+            }
+        }
+    }
+}
+
 /// failing to delete the default route won't cause route failure
 pub fn maybe_routes_clean_up(cfg: &TunConfig) -> std::io::Result<()> {
+    restore_dns_hijack();
+
     if !cfg.route_all {
         return Ok(());
     }

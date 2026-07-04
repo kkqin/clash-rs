@@ -195,6 +195,12 @@ pub fn maybe_add_routes(cfg: &TunConfig, tun_name: &str) -> std::io::Result<()> 
                         warn!("failed to add system bypass routes: {:?}", e);
                         e
                     });
+                    // Point system DNS at the TUN so queries can't leak to the
+                    // physical interface's resolver. Restored in cleanup.
+                    let _ = macos::setup_dns_hijack(cfg).map_err(|e| {
+                        warn!("failed to set up macOS dns hijack: {:?}", e);
+                        e
+                    });
                 }
             }
             #[cfg(target_os = "linux")]
