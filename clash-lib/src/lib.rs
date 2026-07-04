@@ -78,6 +78,7 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 type ArcRunner = Arc<dyn Runner>;
+type ReloadResult = std::result::Result<(), String>;
 
 pub struct Options {
     pub config: Config,
@@ -139,7 +140,7 @@ pub struct GlobalState {
     #[cfg(all(feature = "tun", target_os = "macos"))]
     route_monitor: ArcRunner,
     dns_listener: ArcRunner,
-    reload_tx: mpsc::Sender<(Config, oneshot::Sender<()>)>,
+    reload_tx: mpsc::Sender<(Config, oneshot::Sender<ReloadResult>)>,
     cwd: String,
     /// Path to the config file used at startup. Used by the dashboard "Reload"
     /// button which sends an empty path to mean "reload current config".
@@ -408,16 +409,25 @@ pub async fn start(
                 Ok(c) => c,
                 Err(e) => {
                     error!("failed to reload config: {}", e);
+                    let _ = done.send(Err(format!("failed to reload config: {e}")));
                     continue;
                 }
             };
 
             let controller_cfg = config.general.controller.clone();
 
-            let new_components =
-                create_components(cwd_clone.clone(), config).await?;
-
-            let _ = done.send(());
+            let new_components = match create_components(cwd_clone.clone(), config)
+                .await
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    error!("failed to create components for reloaded config: {}", e);
+                    let _ = done.send(Err(format!(
+                        "failed to create components for reloaded config: {e}"
+                    )));
+                    continue;
+                }
+            };
 
             let old_dns_listener = {
                 let g = global_state_for_reload.lock().await;
@@ -426,12 +436,13 @@ pub async fn start(
 
             components.stop_all();
 
-            // Ensure TUN + route monitor are fully stopped on macOS before
-            // recreating them. This avoids utun "exists" races during reload.
+            // Ensure old listeners are fully stopped before recreating them.
+            // This avoids utun and port-binding races during reload.
             #[cfg(feature = "tun")]
             components.tun_runner.join().await.ok();
             #[cfg(all(feature = "tun", target_os = "macos"))]
             components.route_monitor.join().await.ok();
+            components.inbound_manager.join().await.ok();
 
             // Wait for the old DNS listener to fully stop before starting the new
             // one, to avoid EADDRINUSE on the same port.
@@ -463,17 +474,21 @@ pub async fn start(
                 components.dns_listen.clone(),
                 components.dns_enabled,
             ));
-            let mut g = global_state_for_reload.lock().await;
+            {
+                let mut g = global_state_for_reload.lock().await;
 
-            #[cfg(feature = "tun")]
-            {
-                g.tunnel_runner = components.tun_runner.clone();
+                #[cfg(feature = "tun")]
+                {
+                    g.tunnel_runner = components.tun_runner.clone();
+                }
+                #[cfg(all(feature = "tun", target_os = "macos"))]
+                {
+                    g.route_monitor = components.route_monitor.clone();
+                }
+                g.dns_listener = components.dns_listener.clone();
             }
-            #[cfg(all(feature = "tun", target_os = "macos"))]
-            {
-                g.route_monitor = components.route_monitor.clone();
-            }
-            g.dns_listener = components.dns_listener.clone();
+
+            let _ = done.send(Ok(()));
 
             api_listener_for_reload.shutdown();
             // Wait for the old API server to fully stop before starting the new

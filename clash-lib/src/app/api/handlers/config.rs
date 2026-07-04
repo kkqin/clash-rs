@@ -200,7 +200,8 @@ async fn update_configs(
     let (done, wait) = tokio::sync::oneshot::channel();
     match reload_tx.send((cfg, done)).await {
         Ok(_) => match wait.await {
-            Ok(_) => StatusCode::NO_CONTENT.into_response(),
+            Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+            Ok(Err(message)) => (StatusCode::BAD_REQUEST, message).into_response(),
             Err(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "config reload did not complete",
