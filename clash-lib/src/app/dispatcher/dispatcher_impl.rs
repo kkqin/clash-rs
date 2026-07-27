@@ -1,9 +1,7 @@
 use crate::{
     app::{
-        dispatcher::tracked::{TrackedDatagram, TrackedStream},
-        dns::ClashResolver,
-        outbound::manager::ThreadSafeOutboundManager,
-        router::ArcRouter,
+        dns::ClashResolver, net::get_interface_by_name,
+        outbound::manager::ThreadSafeOutboundManager, router::ArcRouter,
     },
     common::io::copy_bidirectional,
     config::{
@@ -11,7 +9,7 @@ use crate::{
         internal::proxy::{PROXY_DIRECT, PROXY_GLOBAL},
     },
     proxy::{
-        AnyInboundDatagram, ClientStream, datagram::UdpPacket, utils::ToCanonical,
+        AnyInboundDatagram, ProxyStream, datagram::UdpPacket, utils::ToCanonical,
     },
     session::{Session, SocksAddr},
 };
@@ -97,7 +95,7 @@ impl Dispatcher {
     pub async fn dispatch_stream(
         &self,
         mut sess: Session,
-        mut lhs: Box<dyn ClientStream>,
+        mut lhs: Box<dyn ProxyStream>,
     ) {
         let dest: SocksAddr =
             match reverse_lookup(&self.resolver, &sess.destination).await {
@@ -127,10 +125,22 @@ impl Dispatcher {
             RunMode::Direct => (PROXY_DIRECT, None),
         };
 
+        if let Some(interface) = rule.and_then(|rule| rule.interface()) {
+            match get_interface_by_name(interface) {
+                Some(iface) => sess.iface = Some(iface),
+                None => warn!(
+                    "rule-selected interface `{}` was not found; using the default \
+                     interface",
+                    interface
+                ),
+            }
+        }
+        let outbound_name = outbound_name.to_string();
+
         debug!("dispatching {} to {}[{}]", sess, outbound_name, mode);
 
         let mgr = self.outbound_manager.clone();
-        let handler = match mgr.get_outbound(outbound_name).await {
+        let handler = match mgr.get_outbound(&outbound_name).await {
             Some(h) => h,
             None => {
                 debug!("unknown rule: {}, fallback to direct", outbound_name);
@@ -143,13 +153,12 @@ impl Dispatcher {
             .instrument(info_span!("connect_stream", outbound_name = outbound_name,))
             .await
         {
-            Ok(rhs) => {
+            Ok(mut rhs) => {
                 debug!("remote connection established {}", sess);
-                let rhs = TrackedStream::new(
-                    rhs,
+                rhs.install_tracking(
                     self.manager.clone(),
                     sess.clone(),
-                    rule,
+                    rule.map(|r| r.matcher()),
                 )
                 .await;
                 match copy_bidirectional(
@@ -341,6 +350,16 @@ impl Dispatcher {
                     RunMode::Direct => (PROXY_DIRECT, None),
                 };
 
+                if let Some(interface) = rule.and_then(|rule| rule.interface()) {
+                    match get_interface_by_name(interface) {
+                        Some(iface) => sess.iface = Some(iface),
+                        None => warn!(
+                            "rule-selected interface `{}` was not found; using the \
+                             default interface",
+                            interface
+                        ),
+                    }
+                }
                 let outbound_name = outbound_name.to_string();
 
                 debug!("dispatching {} to {}[{}]", sess, outbound_name, mode);
@@ -380,7 +399,7 @@ impl Dispatcher {
                 {
                     None => {
                         debug!("building {} outbound datagram connecting", sess);
-                        let outbound_datagram = match handler
+                        let mut outbound_datagram = match handler
                             .connect_datagram(&sess, resolver.clone())
                             .await
                         {
@@ -393,13 +412,13 @@ impl Dispatcher {
 
                         debug!("{} outbound datagram connected", sess);
 
-                        let outbound_datagram = TrackedDatagram::new(
-                            outbound_datagram,
-                            manager.clone(),
-                            sess.clone(),
-                            rule,
-                        )
-                        .await;
+                        outbound_datagram
+                            .install_tracking(
+                                manager.clone(),
+                                sess.clone(),
+                                rule.map(|r| r.matcher()),
+                            )
+                            .await;
 
                         let (mut remote_w, mut remote_r) = outbound_datagram.split();
                         let (remote_sender, mut remote_forwarder) =

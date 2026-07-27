@@ -219,7 +219,6 @@ totp-rs = { version = "^5.7", features = ["serde_support"], optional = true }
 shadowquic = { version = "0.3.12", optional = true, default-features = false}
 
 # experimental
-downcast-rs = "2.0"
 tailscale = { version = "0.3.3", optional = true }
 
 aws-lc-rs = { version = "1", default-features = false, optional = true }
@@ -229,6 +228,7 @@ cbc = "0.2"
 etherparse = {version = "0.20", optional = true }
 tempfile = "3.27"
 notify = "8"
+percent-encoding = "2.3.2"
 
 [dev-dependencies]
 mockall = "0.15.0"
