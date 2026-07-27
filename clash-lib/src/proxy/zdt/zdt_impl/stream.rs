@@ -264,3 +264,5 @@ where
         Pin::new(stream).poll_shutdown(cx)
     }
 }
+
+impl<S> crate::proxy::ProxyStream for ZdtStream<S> where S: crate::proxy::ProxyStream {}

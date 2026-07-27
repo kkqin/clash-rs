@@ -4,18 +4,18 @@ use super::DialWithConnector;
 use crate::{
     app::{
         dispatcher::{
-            BoxedChainedDatagram, BoxedChainedStream, ChainedStream,
-            ChainedStreamWrapper,
+            BoxedInstrumentedDatagram, BoxedInstrumentedStream, InstrumentedStream,
+            InstrumentedStreamWrapper,
         },
         dns::ThreadSafeDNSResolver,
     },
     impl_default_connector,
     proxy::{
         AnyStream, ConnectorType, HandlerCommonOptions, OutboundHandler,
-        OutboundType,
+        OutboundType, ProxyStream,
+        socks::{client_handshake, socks_command},
         transport::Transport,
         utils::{GLOBAL_DIRECT_CONNECTOR, RemoteConnector},
-        socks::{socks_command, client_handshake},
     },
     session::Session,
 };
@@ -136,8 +136,7 @@ impl Handler {
         if let Some(pool) = self.pool.as_ref() {
             if let Some(stream) = pool.take() {
                 return Ok(
-                    Box::new(PooledStream::new(stream, pool.clone()))
-                        as AnyStream,
+                    Box::new(PooledStream::new(stream, pool.clone())) as AnyStream
                 );
             }
         }
@@ -180,7 +179,7 @@ impl OutboundHandler for Handler {
         &self,
         sess: &Session,
         resolver: ThreadSafeDNSResolver,
-    ) -> std::io::Result<BoxedChainedStream> {
+    ) -> std::io::Result<BoxedInstrumentedStream> {
         let dialer = self.connector.read().await;
 
         if let Some(dialer) = dialer.as_ref() {
@@ -202,7 +201,7 @@ impl OutboundHandler for Handler {
         &self,
         sess: &Session,
         resolver: ThreadSafeDNSResolver,
-    ) -> std::io::Result<BoxedChainedDatagram> {
+    ) -> std::io::Result<BoxedInstrumentedDatagram> {
         let dialer = self.connector.read().await;
 
         if let Some(dialer) = dialer.as_ref() {
@@ -229,10 +228,10 @@ impl OutboundHandler for Handler {
         sess: &Session,
         resolver: ThreadSafeDNSResolver,
         connector: &dyn RemoteConnector,
-    ) -> std::io::Result<BoxedChainedStream> {
+    ) -> std::io::Result<BoxedInstrumentedStream> {
         let s = self.get_transport_stream(sess, resolver, connector).await?;
         let s = self.build_zdt_stream(s, sess).await?;
-        let s = ChainedStreamWrapper::new(s);
+        let s = InstrumentedStreamWrapper::new(s);
         s.append_to_chain(self.name()).await;
         Ok(Box::new(s))
     }
@@ -242,7 +241,7 @@ impl OutboundHandler for Handler {
         _sess: &Session,
         _resolver: ThreadSafeDNSResolver,
         _connector: &dyn RemoteConnector,
-    ) -> std::io::Result<BoxedChainedDatagram> {
+    ) -> std::io::Result<BoxedInstrumentedDatagram> {
         Err(std::io::Error::other("not implement"))
     }
 }
@@ -306,7 +305,7 @@ impl AsyncRead for PooledStream {
                 return Poll::Ready(Err(io::Error::new(
                     io::ErrorKind::BrokenPipe,
                     "stream closed",
-                )))
+                )));
             }
         };
         let poll = Pin::new(inner.as_mut()).poll_read(cx, buf);
@@ -330,7 +329,7 @@ impl AsyncWrite for PooledStream {
                 return Poll::Ready(Err(io::Error::new(
                     io::ErrorKind::BrokenPipe,
                     "stream closed",
-                )))
+                )));
             }
         };
         let poll = Pin::new(inner.as_mut()).poll_write(cx, buf);
@@ -351,7 +350,7 @@ impl AsyncWrite for PooledStream {
                 return Poll::Ready(Err(io::Error::new(
                     io::ErrorKind::BrokenPipe,
                     "stream closed",
-                )))
+                )));
             }
         };
         let poll = Pin::new(inner.as_mut()).poll_flush(cx);
@@ -372,7 +371,7 @@ impl AsyncWrite for PooledStream {
                 return Poll::Ready(Err(io::Error::new(
                     io::ErrorKind::BrokenPipe,
                     "stream closed",
-                )))
+                )));
             }
         };
         let poll = Pin::new(inner.as_mut()).poll_shutdown(cx);
@@ -382,6 +381,8 @@ impl AsyncWrite for PooledStream {
         poll
     }
 }
+
+impl ProxyStream for PooledStream {}
 
 impl Drop for PooledStream {
     fn drop(&mut self) {
