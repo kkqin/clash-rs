@@ -384,37 +384,53 @@ impl RouteMonitorRunner {
                 let rtm: &libc::rt_msghdr =
                     unsafe { &*(buf.as_ptr() as *const libc::rt_msghdr) };
 
-                match rtm.rtm_type as i32 {
-                    libc::RTM_DELETE | libc::RTM_CHANGE => {
-                        if macos::has_default_route(rtm) {
-                            // debounce to avoid thrashing
-                            let now = std::time::Instant::now();
-                            if last_fix
-                                .map(|t| now.duration_since(t) < Duration::from_secs(3))
-                                .unwrap_or(false)
-                            {
-                                continue;
-                            }
-
-                            warn!(
-                                "route socket event type={} flags=0x{:x}",
-                                rtm.rtm_type, rtm.rtm_flags
-                            );
-                            last_fix = Some(now);
-                            if let Err(err) = macos::maybe_add_default_route() {
-                                error!("maybe_add_default_route error: {:?}", err);
-                            } else {
-                                warn!("maybe_add_default_route succeeded");
-                            }
-
-                            // Re-apply any registered host routes (best-effort)
-                            reapply_host_routes().await;
-
-                            // Broadcast a netchange event to subscribers (e.g., outbound manager)
-                            let _ = NETCHANGE_TX.send(());
+                let should_recover = match rtm.rtm_type as i32 {
+                    libc::RTM_DELETE => macos::is_default_route_delete(rtm),
+                    libc::RTM_CHANGE => macos::is_default_route_change(rtm),
+                    libc::RTM_IFINFO => {
+                        // On lid wake / Wi-Fi re-association the default route
+                        // often survives untouched, but the physical interface
+                        // itself bounces down then up (no RTM_DELETE/RTM_CHANGE
+                        // is ever emitted). Treat "interface came back up" as a
+                        // signal to re-check and reapply our routes.
+                        if (n as usize) >= std::mem::size_of::<libc::if_msghdr>() {
+                            let ifm: &libc::if_msghdr = unsafe {
+                                &*(buf.as_ptr() as *const libc::if_msghdr)
+                            };
+                            ifm.ifm_flags & libc::IFF_UP != 0
+                        } else {
+                            false
                         }
                     }
-                    _ => {}
+                    _ => false,
+                };
+
+                if should_recover {
+                    // debounce to avoid thrashing
+                    let now = std::time::Instant::now();
+                    if last_fix
+                        .map(|t| now.duration_since(t) < Duration::from_secs(3))
+                        .unwrap_or(false)
+                    {
+                        continue;
+                    }
+
+                    warn!(
+                        "route socket event type={} flags=0x{:x}",
+                        rtm.rtm_type, rtm.rtm_flags
+                    );
+                    last_fix = Some(now);
+                    if let Err(err) = macos::maybe_add_default_route() {
+                        error!("maybe_add_default_route error: {:?}", err);
+                    } else {
+                        warn!("maybe_add_default_route succeeded");
+                    }
+
+                    // Re-apply any registered host routes (best-effort)
+                    reapply_host_routes().await;
+
+                    // Broadcast a netchange event to subscribers (e.g., outbound manager)
+                    let _ = NETCHANGE_TX.send(());
                 }
             }
         }

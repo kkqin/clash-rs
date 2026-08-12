@@ -640,23 +640,38 @@ unsafe fn parse_route_message(rtm: &libc::rt_msghdr) -> Option<RouteEntry> {
     }
 }
 
-pub fn has_default_route(rtm: &libc::rt_msghdr) -> bool {
-    let entry = unsafe { parse_route_message(rtm) };
-    if entry.is_some() {
-        let entry = entry.unwrap();
-        warn!("Detected default route change: {:?}", entry);
-        let (gateway_v4, gateway_v6) = get_default_gateway().unwrap_or((None, None));
-        if let Some(gateway) = gateway_v4 {
-            if gateway.to_string() == entry.gateway {
-                return true;
-            }
-        } else if let Some(gateway) = gateway_v6 {
-            if gateway.to_string() == entry.gateway {
-                return true;
-            }
-        }
-        false
-    } else {
-        false
+/// Check whether an `RTM_CHANGE` route message concerns the current default
+/// route. Unlike `RTM_DELETE`, the route still exists when this fires, so we
+/// can and should confirm it's actually the active default gateway that
+/// changed, to avoid reacting to unrelated route changes.
+pub fn is_default_route_change(rtm: &libc::rt_msghdr) -> bool {
+    let Some(entry) = (unsafe { parse_route_message(rtm) }) else {
+        return false;
+    };
+    warn!("Detected default route change: {:?}", entry);
+    let (gateway_v4, gateway_v6) = get_default_gateway().unwrap_or((None, None));
+    if let Some(gateway) = gateway_v4
+        && gateway.to_string() == entry.gateway
+    {
+        return true;
     }
+    if let Some(gateway) = gateway_v6
+        && gateway.to_string() == entry.gateway
+    {
+        return true;
+    }
+    false
+}
+
+/// Check whether an `RTM_DELETE` route message concerns the default route.
+/// The route is already gone by the time this fires, so querying "the
+/// current default gateway" and requiring it to match is backwards - there
+/// often isn't one anymore. We only need to know the deleted entry *was* a
+/// default route.
+pub fn is_default_route_delete(rtm: &libc::rt_msghdr) -> bool {
+    let Some(entry) = (unsafe { parse_route_message(rtm) }) else {
+        return false;
+    };
+    warn!("Detected default route delete: {:?}", entry);
+    true
 }
