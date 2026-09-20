@@ -98,10 +98,26 @@ impl DockerTestRunner {
             Docker::connect_with_socket_defaults()?
         };
 
-        docker
-            .create_image(image_conf, None, None)
-            .try_collect::<Vec<_>>()
-            .await?;
+        let mut pull_attempts = 0;
+        loop {
+            match docker
+                .create_image(image_conf.clone(), None, None)
+                .try_collect::<Vec<_>>()
+                .await
+            {
+                Ok(_) => break,
+                Err(e) if pull_attempts < 3 => {
+                    pull_attempts += 1;
+                    tracing::warn!(
+                        "create_image failed (attempt {}): {}, retrying in 2s...",
+                        pull_attempts,
+                        e
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
 
         // For remote Docker, we need to handle mounts differently
         let mounts = container_conf
@@ -430,7 +446,8 @@ impl MultiDockerTestRunner {
                      error: {:?}",
                     e
                 );
-                // Cleanup all previously added containers before returning error
+                // Cleanup all previously added containers before returning
+                // error
                 for runner in std::mem::take(&mut self.runners) {
                     let _ = runner.cleanup().await;
                 }

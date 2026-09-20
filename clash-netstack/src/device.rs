@@ -50,8 +50,9 @@ impl Device for NetstackDevice {
     ) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         // Reserve a tx slot FIRST before touching rx_queue.
         // If we checked rx_queue first, a successful try_recv() would consume
-        // the inbound packet even when try_reserve() subsequently fails, silently
-        // dropping ACKs and preventing smoltcp from advancing its send window.
+        // the inbound packet even when try_reserve() subsequently fails,
+        // silently dropping ACKs and preventing smoltcp from advancing
+        // its send window.
         let permit = self.tx_sender.try_reserve().ok()?;
         let packet = self.rx_queue.try_recv().ok()?;
 
@@ -72,6 +73,38 @@ impl Device for NetstackDevice {
 
     fn capabilities(&self) -> DeviceCapabilities {
         self.capabilities.clone()
+    }
+}
+
+pub struct RxTokenImpl {
+    packet: Packet,
+}
+
+impl RxToken for RxTokenImpl {
+    fn consume<R, F>(self, f: F) -> R
+    where
+        F: FnOnce(&[u8]) -> R,
+    {
+        f(self.packet.data())
+    }
+}
+
+pub struct TxTokenImpl<'a> {
+    tx_sender: mpsc::Permit<'a, Packet>,
+}
+
+impl<'a> TxToken for TxTokenImpl<'a> {
+    fn consume<R, F>(self, len: usize, f: F) -> R
+    where
+        F: FnOnce(&mut [u8]) -> R,
+    {
+        let mut buffer = vec![0u8; len];
+        let result = f(&mut buffer);
+
+        let packet = Packet::new(buffer);
+        self.tx_sender.send(packet);
+
+        result
     }
 }
 
@@ -132,37 +165,5 @@ mod tests {
             "BUG: inbound ACK was silently dropped when tx channel was full; \
              smoltcp will never advance its send window → download stalls to 0"
         );
-    }
-}
-
-pub struct RxTokenImpl {
-    packet: Packet,
-}
-
-impl RxToken for RxTokenImpl {
-    fn consume<R, F>(self, f: F) -> R
-    where
-        F: FnOnce(&[u8]) -> R,
-    {
-        f(self.packet.data())
-    }
-}
-
-pub struct TxTokenImpl<'a> {
-    tx_sender: mpsc::Permit<'a, Packet>,
-}
-
-impl<'a> TxToken for TxTokenImpl<'a> {
-    fn consume<R, F>(self, len: usize, f: F) -> R
-    where
-        F: FnOnce(&mut [u8]) -> R,
-    {
-        let mut buffer = vec![0u8; len];
-        let result = f(&mut buffer);
-
-        let packet = Packet::new(buffer);
-        self.tx_sender.send(packet);
-
-        result
     }
 }

@@ -113,8 +113,8 @@ impl VlessStream {
 
         debug!("VLESS waiting for response");
 
-        // Read response (VLESS response is just version + additional info length +
-        // additional info)
+        // Read response (VLESS response is just version + additional info
+        // length + additional info)
         let mut response = [0u8; 2];
         tokio::io::AsyncReadExt::read_exact(&mut self.inner, &mut response)
             .await
@@ -225,6 +225,8 @@ pub(crate) fn build_addon_bytes(flow: &str) -> Vec<u8> {
     buf
 }
 
+impl crate::proxy::ProxyStream for VlessStream {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,5 +306,3 @@ mod tests {
         assert!(result.is_err());
     }
 }
-
-impl crate::proxy::ProxyStream for VlessStream {}

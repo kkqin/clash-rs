@@ -376,8 +376,8 @@ pub async fn start(
         components.dns_enabled,
     ));
 
-    // api_listener is not part of components because it requires components to be
-    // initialized before it can be initialized. start it manually.
+    // api_listener is not part of components because it requires components to
+    // be initialized before it can be initialized. start it manually.
     api_listener.run_async();
 
     {
@@ -579,6 +579,10 @@ impl RuntimeComponents {
         self.tun_runner.shutdown();
         self.dns_listener.shutdown();
         self.inbound_manager.shutdown();
+        let stats = self.statistics_manager.clone();
+        tokio::spawn(async move {
+            stats.stop().await;
+        });
     }
 }
 
@@ -651,8 +655,9 @@ async fn create_components(
     }
 
     debug!("initializing dns resolver");
-    // Clone the dns.listen for the DNS Server later before we consume the config
-    // TODO: we should separate the DNS resolver and DNS server config here
+    // Clone the dns.listen for the DNS Server later before we consume the
+    // config TODO: we should separate the DNS resolver and DNS server
+    // config here
     let dns_listen = config.dns.listen.clone();
     let dns_enable = config.dns.enable;
 
@@ -810,6 +815,12 @@ async fn create_components(
 
     let statistics_manager = StatisticsManager::new();
 
+    // Inject the DNS resolver so statistics_manager can clear DNS caches
+    // under memory pressure (see check_memory_pressure).
+    statistics_manager
+        .set_dns_resolver(dns_resolver.clone())
+        .await;
+
     debug!("initializing dispatcher");
     let dispatcher = Arc::new(Dispatcher::new(
         outbound_manager.clone(),
@@ -817,8 +828,28 @@ async fn create_components(
         dns_resolver.clone(),
         config.general.mode,
         statistics_manager.clone(),
-        config.experimental.and_then(|e| e.tcp_buffer_size),
+        config.experimental.as_ref().and_then(|e| e.tcp_buffer_size),
     ));
+
+    let closed_flows_cap = config
+        .experimental
+        .as_ref()
+        .and_then(|e| e.closed_flows_cap)
+        .unwrap_or(crate::app::dispatcher::DEFAULT_CLOSED_FLOWS_CAP);
+    crate::app::dispatcher::set_closed_flows_cap(closed_flows_cap);
+
+    // Set AnyTLS buffer sizes from experimental config (or reset to defaults)
+    let duplex = config
+        .experimental
+        .as_ref()
+        .and_then(|exp| exp.anytls_duplex_buffer_size)
+        .unwrap_or(16 * 1024);
+    let relay = config
+        .experimental
+        .as_ref()
+        .and_then(|exp| exp.anytls_relay_buffer_size)
+        .unwrap_or(4 * 1024);
+    crate::proxy::anytls::set_buffer_config(duplex, relay);
 
     debug!("initializing authenticator");
     let authenticator = Arc::new(auth::PlainAuthenticator::new(config.users));

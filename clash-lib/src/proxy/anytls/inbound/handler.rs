@@ -9,7 +9,10 @@ use super::{
 };
 use crate::{
     Dispatcher,
-    proxy::AnyStream,
+    proxy::{
+        AnyStream,
+        anytls::{duplex_buffer_size, relay_buffer_size},
+    },
     session::{Network, Session, SocksAddr, Type},
 };
 use bytes::BufMut;
@@ -18,13 +21,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_rustls::TlsAcceptor;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
-
-/// Size of the in-process duplex pipe between the AnyTLS relay and the
-/// dispatcher (mirrors the outbound).
-const DUPLEX_BUFFER_SIZE: usize = 64 * 1024;
-
-/// Read buffer size for framed relay (mirrors the outbound).
-const RELAY_BUFFER_SIZE: usize = 16 * 1024;
 
 /// Forward an unauthenticated TLS stream to a fallback backend for camouflage.
 ///
@@ -298,7 +294,7 @@ async fn handle_udp_session(
     fw_mark: Option<u32>,
 ) {
     let (mut remote_read, mut remote_write) = tokio::io::split(tls_stream);
-    let (mut app_stream, relay_stream) = tokio::io::duplex(DUPLEX_BUFFER_SIZE);
+    let (mut app_stream, relay_stream) = tokio::io::duplex(duplex_buffer_size());
     let (mut relay_read, mut relay_write) = tokio::io::split(relay_stream);
 
     let cancel = CancellationToken::new();
@@ -308,7 +304,7 @@ async fn handle_udp_session(
 
     // Task A: relay_read (writes from InboundDatagramAnytls) → CMD_PSH → TLS
     tokio::spawn(async move {
-        let mut buf = vec![0u8; RELAY_BUFFER_SIZE];
+        let mut buf = vec![0u8; relay_buffer_size()];
         loop {
             tokio::select! {
                 biased;
@@ -334,7 +330,8 @@ async fn handle_udp_session(
         }
     });
 
-    // Task B: TLS → CMD_PSH frames → relay_write (reads by InboundDatagramAnytls)
+    // Task B: TLS → CMD_PSH frames → relay_write (reads by
+    // InboundDatagramAnytls)
     tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -429,7 +426,7 @@ async fn handle_tcp_relay(
     fw_mark: Option<u32>,
 ) {
     let (mut remote_read, mut remote_write) = tokio::io::split(tls_stream);
-    let (app_stream, relay_stream) = tokio::io::duplex(DUPLEX_BUFFER_SIZE);
+    let (app_stream, relay_stream) = tokio::io::duplex(duplex_buffer_size());
     let (mut relay_read, mut relay_write) = tokio::io::split(relay_stream);
 
     let cancel = CancellationToken::new();
@@ -438,7 +435,7 @@ async fn handle_tcp_relay(
 
     // Task A: relay_read (from dispatcher) → CMD_PSH frames → remote_write
     tokio::spawn(async move {
-        let mut buf = vec![0u8; RELAY_BUFFER_SIZE];
+        let mut buf = vec![0u8; relay_buffer_size()];
         loop {
             tokio::select! {
                 biased;
@@ -649,9 +646,7 @@ mod tests {
         let client_task = tokio::spawn(async move {
             // Build a rustls client config that trusts our self-signed cert.
             let mut root_store = rustls::RootCertStore::empty();
-            root_store
-                .add(rustls::pki_types::CertificateDer::from(cert_der))
-                .unwrap();
+            root_store.add(cert_der).unwrap();
             let tls_config = rustls::ClientConfig::builder()
                 .with_root_certificates(root_store)
                 .with_no_client_auth();
@@ -665,10 +660,9 @@ mod tests {
                 .await
                 .unwrap();
 
-            let settings = format!(
-                "v=2\nclient=clash-rs-test\\
+            let settings = "v=2\nclient=clash-rs-test\\
                  npadding-md5=47edb1f4ed8a99480bf416d178311f10"
-            );
+                .to_string();
             let dest =
                 SocksAddr::try_from((expected_host.to_owned(), expected_port))
                     .unwrap();
@@ -708,7 +702,8 @@ mod tests {
     async fn test_anytls_fallback_to_mock_generate_204() {
         install_crypto_provider();
 
-        // ── Mock backend: returns HTTP 204 (like Google generate_204) ─────────
+        // ── Mock backend: returns HTTP 204 (like Google generate_204)
+        // ─────────
         let backend_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let backend_addr = backend_listener.local_addr().unwrap();
 
@@ -721,7 +716,8 @@ mod tests {
                 .unwrap();
         });
 
-        // ── AnyTLS inbound with fallback → mock backend ───────────────────────
+        // ── AnyTLS inbound with fallback → mock backend
+        // ───────────────────────
         let rcgen::CertifiedKey {
             cert,
             signing_key: key_pair,
@@ -909,9 +905,7 @@ mod tests {
         // Client task: connect via TLS, send AnyTLS handshake with magic host.
         let client_task = tokio::spawn(async move {
             let mut root_store = rustls::RootCertStore::empty();
-            root_store
-                .add(rustls::pki_types::CertificateDer::from(cert_der))
-                .unwrap();
+            root_store.add(cert_der).unwrap();
             let tls_config = rustls::ClientConfig::builder()
                 .with_root_certificates(root_store)
                 .with_no_client_auth();
