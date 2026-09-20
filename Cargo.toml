@@ -48,3 +48,24 @@ needless_collect = "deny"
 [patch.crates-io]
 rustls = { git = "https://github.com/Watfaq/rustls.git", branch = "watfaq/0.23.40" }
 tokio-rustls = { git = "https://github.com/Watfaq/tokio-rustls.git", branch = "watfaq/0.26.4" }
+
+# tuic-core (pinned to tag v1.8.5) depends on both `Tipuch/quinn`'s `bbrv3`
+# branch and `proxy-rs/quinn-congestions`'s `main` branch with no rev, so a
+# fresh `cargo generate-lockfile` can pick up branch tips that are newer than
+# what v1.8.5 was built against and no longer compatible with each other
+# (quinn dropped `ZeroRttAccepted`; quinn-congestions' `main` now needs a
+# newer quinn_proto congestion API than v1.8.5's quinn pin provides). Cargo
+# won't let a git source patch itself, and the known-good quinn commit
+# (ce60e5b5) was later force-pushed off the bbrv3 branch tip, so both are
+# pinned via local clones instead. See clash-lib/Cargo.toml's tuic comment.
+#
+# To reproduce/update a pinned clone:
+#   git clone <repo-url> ../<name>-pinned
+#   cd ../<name>-pinned && git fetch origin <sha> && git checkout <sha>
+[patch."https://github.com/Tipuch/quinn.git"]
+quinn = { path = "../quinn-pinned/quinn" }
+quinn-proto = { path = "../quinn-pinned/quinn-proto" }
+quinn-udp = { path = "../quinn-pinned/quinn-udp" }
+
+[patch."https://github.com/proxy-rs/quinn-congestions.git"]
+quinn-congestions = { path = "../quinn-congestions-pinned" }
