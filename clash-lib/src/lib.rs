@@ -844,6 +844,9 @@ async fn create_components(
             .await;
     }
 
+    #[cfg(all(feature = "tun", target_os = "macos"))]
+    let tun_cfg_for_route_monitor = config.tun.clone();
+
     #[cfg(feature = "tun")]
     debug!("initializing tun runner");
     #[cfg(feature = "tun")]
@@ -857,6 +860,7 @@ async fn create_components(
     #[cfg(all(feature = "tun", target_os = "macos"))]
     let route_monitor: ArcRunner = Arc::new(tun::routes::RouteMonitorRunner::new(
         tun_enable,
+        tun_cfg_for_route_monitor,
         Some(cancellation_token.child_token()),
     ));
 

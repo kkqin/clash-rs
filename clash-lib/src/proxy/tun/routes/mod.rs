@@ -254,6 +254,7 @@ pub fn maybe_add_routes(cfg: &TunConfig, tun_name: &str) -> std::io::Result<()> 
 #[cfg(target_os = "macos")]
 pub struct RouteMonitorRunner {
     enable: bool,
+    tun_cfg: TunConfig,
     cancellation_token: CancellationToken,
     route_sock_fd: Arc<AtomicI32>,
     task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -263,10 +264,12 @@ pub struct RouteMonitorRunner {
 impl RouteMonitorRunner {
     pub fn new(
         enable: bool,
+        tun_cfg: TunConfig,
         cancellation_token: Option<CancellationToken>,
     ) -> Self {
         Self {
             enable,
+            tun_cfg,
             cancellation_token: cancellation_token.unwrap_or_default(),
             route_sock_fd: Arc::new(AtomicI32::new(-1)),
             task: std::sync::Mutex::new(None),
@@ -276,6 +279,7 @@ impl RouteMonitorRunner {
     async fn monitor(
         cancellation_token: CancellationToken,
         route_sock_fd: Arc<AtomicI32>,
+        tun_cfg: TunConfig,
     ) {
         let mut backoff_secs = 1u64;
         let mut last_fix: Option<std::time::Instant> = None;
@@ -429,6 +433,15 @@ impl RouteMonitorRunner {
                     // Re-apply any registered host routes (best-effort)
                     reapply_host_routes().await;
 
+                    // The system can reset per-service DNS servers on network
+                    // reconfiguration (e.g. DHCP renewal after Wi-Fi
+                    // re-association on wake), silently undoing our hijack.
+                    // Re-assert it so DNS doesn't leak to the physical
+                    // interface's resolver.
+                    if let Err(err) = macos::setup_dns_hijack(&tun_cfg) {
+                        error!("failed to re-apply macOS dns hijack: {:?}", err);
+                    }
+
                     // Broadcast a netchange event to subscribers (e.g., outbound manager)
                     let _ = NETCHANGE_TX.send(());
                 }
@@ -446,8 +459,10 @@ impl Runner for RouteMonitorRunner {
 
         let cancellation_token = self.cancellation_token.clone();
         let route_sock_fd = self.route_sock_fd.clone();
+        let tun_cfg = self.tun_cfg.clone();
         let handle = tokio::spawn(async move {
-            RouteMonitorRunner::monitor(cancellation_token, route_sock_fd).await;
+            RouteMonitorRunner::monitor(cancellation_token, route_sock_fd, tun_cfg)
+                .await;
         });
 
         let mut slot = self.task.lock().expect("route monitor task mutex poisoned");
