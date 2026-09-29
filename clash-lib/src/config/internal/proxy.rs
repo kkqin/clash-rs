@@ -34,14 +34,12 @@ pub fn map_serde_error(
     move |x| {
         if let Some(loc) = x.location() {
             Error::InvalidConfig(format!(
-                "invalid config for {} at line {}, column {} while parsing {}",
-                name,
+                "invalid config for '{name}' at line {}, column {}: {x}",
                 loc.line(),
-                loc.column(),
-                name
+                loc.column()
             ))
         } else {
-            Error::InvalidConfig(format!("error while parsing {name}: {x}"))
+            Error::InvalidConfig(format!("error while parsing '{name}': {x}"))
         }
     }
 }
@@ -747,32 +745,32 @@ impl OutboundProxyProviderDef {
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub struct OutboundHttpProvider {
     #[serde(skip)]
     pub name: String,
     pub url: String,
-    pub interval: u64,
-    pub path: String,
-    pub health_check: HealthCheck,
+    pub interval: Option<u64>,
+    pub path: Option<String>,
+    pub health_check: Option<HealthCheck>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub struct OutboundFileProvider {
     #[serde(skip)]
     pub name: String,
     pub path: String,
     pub interval: Option<u64>,
-    pub health_check: HealthCheck,
+    pub health_check: Option<HealthCheck>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct HealthCheck {
-    pub enable: bool,
-    pub url: String,
-    pub interval: u64,
+    pub enable: Option<bool>,
+    pub url: Option<String>,
+    pub interval: Option<u64>,
     pub lazy: Option<bool>,
 }
 
@@ -951,5 +949,20 @@ mod anytls_tests {
         assert_eq!(config.idle_session_check_interval, Some(30));
         assert_eq!(config.idle_session_timeout, Some(300));
         assert_eq!(config.min_idle_session, Some(2));
+    }
+
+    #[test]
+    fn test_map_serde_error_preserves_reason() {
+        let err: Result<serde_yaml::Value, _> =
+            serde_yaml::from_str("invalid: [unclosed");
+        let serde_err = err.unwrap_err();
+        let mapped = super::map_serde_error("test-proxy".to_string())(serde_err);
+        let msg = mapped.to_string();
+        assert!(
+            msg.contains("test-proxy"),
+            "expected name in message: {msg}"
+        );
+        assert!(msg.contains("line"), "expected line in message: {msg}");
+        assert!(msg.contains("column"), "expected column in message: {msg}");
     }
 }

@@ -8,12 +8,28 @@ updates:
       rust-dependencies:
         patterns:
           - "*"
+        exclude-patterns:
+          - "tower-http"
+          - "tuic-core"
+          - "tuic-server"
+      rust-security-dependencies:
+        applies-to: security-updates
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "tower-http"
+      - dependency-name: "tuic-core"
+      - dependency-name: "tuic-server"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: monthly
     groups:
       actions-dependencies:
+        patterns:
+          - "*"
+      actions-security-dependencies:
+        applies-to: security-updates
         patterns:
           - "*"
   - package-ecosystem: "npm"
@@ -24,4 +40,14 @@ updates:
       npm-dependencies:
         patterns:
           - "*"
+        exclude-patterns:
+          - "typescript"
+      npm-security-dependencies:
+        applies-to: security-updates
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+
 

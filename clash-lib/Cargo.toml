@@ -88,11 +88,11 @@ tracing-appender = { version = "0.2" }
 tracing-log = "0.2"
 
 tracing-chrome = { version = "0.7", optional = true }
-opentelemetry = { version = "0.32", optional = true }
-opentelemetry-otlp = { version = "0.32", optional = true }
-opentelemetry_sdk = { version = "0.32", optional = true, features = ["rt-tokio"] }
+opentelemetry = { version = "0.33", optional = true }
+opentelemetry-otlp = { version = "0.33", optional = true }
+opentelemetry_sdk = { version = "0.33", optional = true, features = ["rt-tokio"] }
 tracing-opentelemetry = { version = "0.33", optional = true }
-opentelemetry-semantic-conventions = { version = "0.32", optional = true, features = ["semconv_experimental"] }
+opentelemetry-semantic-conventions = { version = "0.33", optional = true, features = ["semconv_experimental"] }
 
 # Data structures
 url = "2"
@@ -137,7 +137,7 @@ axum = { version = "0.8", features = ["ws"] }
 # for the dashboard's ServeDir) imports `std::sync::atomic::AtomicU64`, which
 # does not exist on 32-bit targets — it breaks the mips/mipsel builds. Bump once
 # tower-http uses portable-atomic (or the `fs` feature is dropped).
-tower-http = { version = "0.7", features = ["fs", "trace", "cors"] }
+tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # Dashboard auto-download
@@ -219,7 +219,7 @@ totp-rs = { version = "^5.7", features = ["serde_support"], optional = true }
 shadowquic = { version = "0.3.13", optional = true, default-features = false}
 
 # experimental
-tailscale = { version = "0.5.0", optional = true }
+tailscale = { version = "0.6.1", optional = true }
 
 aws-lc-rs = { version = "1", default-features = false, optional = true }
 
