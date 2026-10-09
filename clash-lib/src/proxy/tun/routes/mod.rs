@@ -276,6 +276,46 @@ impl RouteMonitorRunner {
         }
     }
 
+    async fn recover(tun_cfg: &TunConfig) {
+        // During a network switch (e.g. joining a phone hotspot) the new
+        // interface may not have an address yet; retry for a few seconds.
+        let mut ok = false;
+        for attempt in 0..6 {
+            match macos::maybe_add_default_route() {
+                Ok(()) => {
+                    warn!("maybe_add_default_route succeeded");
+                    ok = true;
+                    break;
+                }
+                Err(err) => {
+                    error!(
+                        "maybe_add_default_route error (attempt {}): {:?}",
+                        attempt + 1,
+                        err
+                    );
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+            }
+        }
+
+        // Only refresh once the new interface is usable.
+        if ok {
+            crate::app::net::refresh_outbound_interface().await;
+        }
+
+        // Re-apply any registered host routes (best-effort)
+        reapply_host_routes().await;
+
+        // The system can reset per-service DNS servers on network
+        // reconfiguration, silently undoing our hijack. Re-assert it.
+        if let Err(err) = macos::setup_dns_hijack(tun_cfg) {
+            error!("failed to re-apply macOS dns hijack: {:?}", err);
+        }
+
+        // Broadcast a netchange event to subscribers (e.g., outbound manager)
+        let _ = NETCHANGE_TX.send(());
+    }
+
     async fn monitor(
         cancellation_token: CancellationToken,
         route_sock_fd: Arc<AtomicI32>,
@@ -283,6 +323,7 @@ impl RouteMonitorRunner {
     ) {
         let mut backoff_secs = 1u64;
         let mut last_fix: Option<std::time::Instant> = None;
+        let mut pending = false;
 
         'restart: loop {
             if cancellation_token.is_cancelled() {
@@ -347,6 +388,16 @@ impl RouteMonitorRunner {
                     if err.kind() == io::ErrorKind::WouldBlock
                         || err.kind() == io::ErrorKind::TimedOut
                     {
+                        if pending
+                            && last_fix
+                                .map(|t| t.elapsed() >= Duration::from_secs(3))
+                                .unwrap_or(true)
+                        {
+                            pending = false;
+                            last_fix = Some(std::time::Instant::now());
+                            warn!("running deferred route recovery");
+                            Self::recover(&tun_cfg).await;
+                        }
                         continue;
                     }
 
@@ -416,6 +467,9 @@ impl RouteMonitorRunner {
                         .map(|t| now.duration_since(t) < Duration::from_secs(3))
                         .unwrap_or(false)
                     {
+                        // Don't drop the event: the final state of a burst
+                        // (e.g. hotspot join) must still be recovered.
+                        pending = true;
                         continue;
                     }
 
@@ -424,31 +478,8 @@ impl RouteMonitorRunner {
                         rtm.rtm_type, rtm.rtm_flags
                     );
                     last_fix = Some(now);
-                    if let Err(err) = macos::maybe_add_default_route() {
-                        error!("maybe_add_default_route error: {:?}", err);
-                    } else {
-                        warn!("maybe_add_default_route succeeded");
-                    }
-
-                    // Re-apply any registered host routes (best-effort)
-                    reapply_host_routes().await;
-
-                    // The system can reset per-service DNS servers on network
-                    // reconfiguration (e.g. DHCP renewal after Wi-Fi
-                    // re-association on wake), silently undoing our hijack.
-                    // Re-assert it so DNS doesn't leak to the physical
-                    // interface's resolver.
-                    if let Err(err) = macos::setup_dns_hijack(&tun_cfg) {
-                        error!("failed to re-apply macOS dns hijack: {:?}", err);
-                    }
-
-                    // The cached default outbound interface may now be stale
-                    // (different NIC / index / address); sockets bound to it
-                    // would fail with ENETUNREACH.
-                    crate::app::net::refresh_outbound_interface().await;
-
-                    // Broadcast a netchange event to subscribers (e.g., outbound manager)
-                    let _ = NETCHANGE_TX.send(());
+                    pending = false;
+                    Self::recover(&tun_cfg).await;
                 }
             }
         }

@@ -19,12 +19,13 @@ use hickory_proto::{
         RecordType,
         rdata::opt::{ClientSubnet, EdnsCode, EdnsOption},
     },
-    ProtoError,
 };
 use rustls::{ClientConfig, pki_types::ServerName};
 use tokio::{sync::RwLock, task::JoinHandle};
 use tracing::{info, instrument, trace, warn};
 
+#[cfg(all(target_os = "macos", feature = "tun"))]
+use crate::proxy::tun::routes::{ensure_host_route, register_host_route_target};
 use crate::{
     Error,
     app::{
@@ -35,8 +36,6 @@ use crate::{
     dns::{ThreadSafeDNSClient, dhcp::DhcpClient},
     proxy::OutboundHandler,
 };
-#[cfg(all(target_os = "macos", feature = "tun"))]
-use crate::proxy::tun::routes::{ensure_host_route, register_host_route_target};
 use anyhow::anyhow;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -577,12 +576,10 @@ impl DnsClient {
         options.insert(EdnsOption::Subnet(ClientSubnet::new(addr, prefix, prefix)));
     }
 
-        #[allow(dead_code)]
-        fn is_transient_network_error(e: &ProtoError) -> bool {
-        // Best-effort check; Hickory flattens many IO errors into strings
-        let s = e.to_string();
+    /// Errors meaning the pooled connection is dead (not a slow upstream, so
+    /// "timed out" is intentionally excluded to avoid doubling latency).
+    fn is_transient_error_str(s: &str) -> bool {
         s.contains("Network is unreachable")
-            || s.contains("timed out")
             || s.contains("connection closed")
             || s.contains("Broken pipe")
             || s.contains("Connection reset")
@@ -612,6 +609,30 @@ impl Client for DnsClient {
 
     #[instrument(skip(msg), level = "trace")]
     async fn exchange(&self, msg: &Message) -> anyhow::Result<Message> {
+        match self.exchange_once(msg).await {
+            Err(e) if Self::is_transient_error_str(&e.to_string()) => {
+                // The pooled connection (e.g. DoH h2 over a proxy) was closed
+                // underneath us; drop it and retry once on a fresh one.
+                warn!(
+                    "{}: dns exchange failed ({e:#}), rebuilding and retrying",
+                    self.id()
+                );
+                {
+                    let mut inner = self.inner.write().await;
+                    if let Some(bg) = inner.bg_handle.take() {
+                        bg.abort();
+                    }
+                    inner.c = None;
+                }
+                self.exchange_once(msg).await
+            }
+            r => r,
+        }
+    }
+}
+
+impl DnsClient {
+    async fn exchange_once(&self, msg: &Message) -> anyhow::Result<Message> {
         let need_initialize = {
             let inner = self.inner.read().await;
             inner.c.is_none()
