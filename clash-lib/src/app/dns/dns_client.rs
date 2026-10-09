@@ -206,6 +206,8 @@ pub struct Opts {
 
 type FwMark = Option<u32>;
 
+const RESET_SENTINEL: &str = "dns client was reset concurrently";
+
 #[derive(Clone)]
 enum DnsConfig {
     Udp(
@@ -609,7 +611,13 @@ impl Client for DnsClient {
 
     #[instrument(skip(msg), level = "trace")]
     async fn exchange(&self, msg: &Message) -> anyhow::Result<Message> {
-        match self.exchange_once(msg).await {
+        let mut res = self.exchange_once(msg).await;
+        // Another task reset the client between init and use: just go again
+        // (the next call re-initializes) without tearing anything down.
+        if matches!(&res, Err(e) if e.to_string().contains(RESET_SENTINEL)) {
+            res = self.exchange_once(msg).await;
+        }
+        match res {
             Err(e) if Self::is_transient_error_str(&e.to_string()) => {
                 // The pooled connection (e.g. DoH h2 over a proxy) was closed
                 // underneath us; drop it and retry once on a fresh one.
@@ -675,12 +683,15 @@ impl DnsClient {
         if req.metadata.id == 0 {
             req.metadata.id = rand::random::<u16>();
         }
-        self.inner
-            .read()
-            .await
-            .c
-            .as_ref()
-            .unwrap()
+        // Clone the handle out of the lock: a concurrent failed exchange may
+        // have reset `c` in the meantime, and we must not hold the read lock
+        // across the request.
+        let client = self.inner.read().await.c.clone().ok_or_else(|| {
+            Error::DNSError(
+                RESET_SENTINEL.into(),
+            )
+        })?;
+        client
             .send(req)
             .first_answer()
             .await
