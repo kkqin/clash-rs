@@ -40,6 +40,18 @@ pub async fn init_net_config(tun_somark: Option<u32>) {
     );
 }
 
+/// Re-detect the default outbound interface and update the global.
+/// Call after a network change (Wi-Fi switch, wake, hotspot...) so that new
+/// sockets don't keep binding to a stale interface (ENETUNREACH).
+pub async fn refresh_outbound_interface() {
+    #[cfg(not(target_os = "ios"))]
+    if let Some(new_iface) = get_outbound_interface() {
+        let mut cur = DEFAULT_OUTBOUND_INTERFACE.write().await;
+        tracing::warn!("default outbound interface refreshed: {:?}", new_iface);
+        *cur = Some(new_iface);
+    }
+}
+
 /// Represents a parsed outbound interface for use in runtime.
 #[derive(Serialize, Debug, Clone)]
 pub struct OutboundInterface {
@@ -151,11 +163,14 @@ pub fn get_outbound_interface() -> Option<OutboundInterface> {
             if iface.name.contains("tun") {
                 return false;
             }
-            // Exclude Hyper-V virtual adapters on Windows
+            // Exclude virtual adapters on Windows (Hyper-V, VMware, VirtualBox)
             if cfg!(target_os = "windows")
                 && (iface.name.starts_with("vEthernet")
                     || iface.name.starts_with("vSwitch")
-                    || iface.name.contains("Hyper-V"))
+                    || iface.name.contains("Hyper-V")
+                    || iface.name.contains("VMware")
+                    || iface.name.contains("VMnet")
+                    || iface.name.contains("VirtualBox"))
             {
                 return false;
             }

@@ -207,6 +207,7 @@ pub struct Opts {
 
 type FwMark = Option<u32>;
 
+#[derive(Clone)]
 enum DnsConfig {
     Udp(
         net::SocketAddr,
@@ -297,6 +298,29 @@ pub struct DnsClient {
 }
 
 impl DnsClient {
+    /// The bound interface captured at construction can go stale after a
+    /// network change; prefer the current default outbound interface.
+    async fn cfg_with_fresh_iface(&self) -> DnsConfig {
+        use crate::app::net as appnet;
+        let mut cfg = self.cfg.clone();
+        let Some(old) = &self.iface else {
+            return cfg;
+        };
+        // Re-read the interface by name (index/address may have changed);
+        // if it is gone, fall back to the current default outbound interface.
+        let new_iface = match appnet::get_interface_by_name(&old.name) {
+            Some(i) => Some(i),
+            None => appnet::DEFAULT_OUTBOUND_INTERFACE.read().await.clone(),
+        };
+        match &mut cfg {
+            DnsConfig::Udp(_, i, _, _)
+            | DnsConfig::Tcp(_, i, _, _)
+            | DnsConfig::Tls(_, _, i, _, _)
+            | DnsConfig::Https(_, _, i, _, _) => *i = new_iface,
+        }
+        cfg
+    }
+
     /// Rebuild the DNS stream with retries, waiting between attempts.
     /// Observed on iOS: EADDRNOTAVAIL during network transitions can break
     /// DNS client connections; retrying gives the OS time to settle.
@@ -307,7 +331,8 @@ impl DnsClient {
         const RETRY_DELAY: Duration = Duration::from_millis(200);
 
         for attempt in 0..=MAX_RETRIES {
-            match dns_stream_builder(&self.cfg, self.rule_dispatch.clone()).await {
+            let cfg = self.cfg_with_fresh_iface().await;
+            match dns_stream_builder(&cfg, self.rule_dispatch.clone()).await {
                 Ok(result) => {
                     if attempt > 0 {
                         info!(

@@ -442,6 +442,11 @@ impl RouteMonitorRunner {
                         error!("failed to re-apply macOS dns hijack: {:?}", err);
                     }
 
+                    // The cached default outbound interface may now be stale
+                    // (different NIC / index / address); sockets bound to it
+                    // would fail with ENETUNREACH.
+                    crate::app::net::refresh_outbound_interface().await;
+
                     // Broadcast a netchange event to subscribers (e.g., outbound manager)
                     let _ = NETCHANGE_TX.send(());
                 }
