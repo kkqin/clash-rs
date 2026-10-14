@@ -382,27 +382,55 @@ fn get_dns_servers(service: &str) -> std::io::Result<Vec<String>> {
         .collect())
 }
 
-/// Override every network service's DNS server with the TUN gateway IP so
-/// system DNS queries are funneled into the utun and hijacked. The previous
-/// configuration is saved to [`SAVED_DNS_SERVERS`] for restoration.
+/// Pick the address system DNS should point at. When the built-in DNS server
+/// listens on loopback (or all interfaces) port 53, use the loopback address
+/// so queries are answered by it directly. Otherwise fall back to the TUN
+/// gateway IP; it sits inside the TUN subnet so queries enter the utun and get
+/// hijacked on UDP/53.
+fn hijack_dns_ip(cfg: &TunConfig) -> String {
+    match cfg.dns_listen {
+        Some(addr) if addr.port() == 53 && addr.ip().is_loopback() => {
+            addr.ip().to_string()
+        }
+        Some(addr) if addr.port() == 53 && addr.ip().is_unspecified() => {
+            "127.0.0.1".to_string()
+        }
+        _ => cfg.gateway.addr().to_string(),
+    }
+}
+
+/// Override every network service's DNS server so system DNS queries are
+/// answered by clash (see [`hijack_dns_ip`]). The previous configuration is
+/// saved to [`SAVED_DNS_SERVERS`] for restoration.
+///
+/// This is called again on network changes; the original servers of a service
+/// are only captured the first time, so re-applying never overwrites them with
+/// our own override.
 pub fn setup_dns_hijack(cfg: &TunConfig) -> std::io::Result<()> {
     if !cfg.dns_hijack {
         return Ok(());
     }
 
-    // Use the TUN gateway IP; it sits inside the TUN subnet so queries enter
-    // the utun and get hijacked on UDP/53.
-    let dns_ip = cfg.gateway.addr().to_string();
+    let dns_ip = hijack_dns_ip(cfg);
+    let gateway_ip = cfg.gateway.addr().to_string();
 
     let services = list_network_services()?;
-    let mut saved = Vec::new();
+    let mut guard = SAVED_DNS_SERVERS.lock().unwrap();
+    let saved = guard.get_or_insert_with(Vec::new);
 
     for service in services {
-        match get_dns_servers(&service) {
-            Ok(servers) => saved.push((service.clone(), servers)),
-            Err(e) => {
-                warn!("failed to read dns servers for {service}: {e}");
-                continue;
+        if !saved.iter().any(|(s, _)| s == &service) {
+            match get_dns_servers(&service) {
+                // A lone TUN gateway IP is a leftover from a previous run that
+                // was killed before it could restore; treat it as automatic.
+                Ok(servers) if servers == [gateway_ip.as_str()] => {
+                    saved.push((service.clone(), vec![]))
+                }
+                Ok(servers) => saved.push((service.clone(), servers)),
+                Err(e) => {
+                    warn!("failed to read dns servers for {service}: {e}");
+                    continue;
+                }
             }
         }
 
@@ -421,7 +449,6 @@ pub fn setup_dns_hijack(cfg: &TunConfig) -> std::io::Result<()> {
         }
     }
 
-    *SAVED_DNS_SERVERS.lock().unwrap() = Some(saved);
     Ok(())
 }
 

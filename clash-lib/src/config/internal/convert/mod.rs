@@ -51,11 +51,16 @@ pub(super) fn convert(mut c: def::Config) -> Result<config::Config, crate::Error
     {
         tun.so_mark = c.routing_mark;
     }
+    let dns: crate::app::dns::Config = (&c).try_into()?;
+    let mut tun = tun::convert(c.tun.take())?;
+    if dns.enable {
+        tun.dns_listen = dns.listen.udp;
+    }
     config::Config {
         general: general::convert(&c)?,
-        dns: (&c).try_into()?,
+        dns,
         experimental: c.experimental.take(),
-        tun: tun::convert(c.tun.take())?,
+        tun,
         profile: Profile {
             store_selected: c.profile.store_selected,
             store_smart_stats: c.profile.store_smart_stats,

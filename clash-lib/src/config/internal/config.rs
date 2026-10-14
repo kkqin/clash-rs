@@ -117,6 +117,9 @@ pub struct TunConfig {
     pub so_mark: Option<u32>,
     pub route_table: u32,
     pub dns_hijack: bool,
+    /// UDP listen address of the built-in DNS server, if it is enabled.
+    /// Used on macOS to decide where system DNS is pointed for DNS hijack.
+    pub dns_listen: Option<std::net::SocketAddr>,
 }
 
 #[derive(Serialize, Clone, Debug, Copy, PartialEq, Hash, Eq)]
